@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@welfare-ai/shared-types": ["../../packages/shared-types/src"],
+      "@welfare-ai/shared-types/*": ["../../packages/shared-types/src/*"],
+      "@welfare-ai/shared-utils": ["../../packages/shared-utils/src"],
+      "@welfare-ai/shared-utils/*": ["../../packages/shared-utils/src/*"],
+      "@welfare-ai/ontology-schema": ["../../packages/ontology-schema/src"],
+      "@welfare-ai/ontology-schema/*": ["../../packages/ontology-schema/src/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test"]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "welfare-ai",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "test": "turbo test",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "clean": "turbo clean && rm -rf node_modules",
+    "infra:up": "docker compose -f infra/docker-compose.dev.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.dev.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose.dev.yml logs -f",
+    "db:migrate": "pnpm --filter @welfare-ai/api run db:migrate",
+    "db:seed": "pnpm --filter @welfare-ai/api run db:seed",
+    "db:seed:neo4j": "pnpm --filter @welfare-ai/api run db:seed:neo4j",
+    "db:seed:qdrant": "pnpm --filter @welfare-ai/api run db:seed:qdrant"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0"
+  },
+  "packageManager": "pnpm@10.22.0"
+}
