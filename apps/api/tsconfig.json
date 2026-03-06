@@ -13,18 +13,13 @@
     "incremental": true,
     "skipLibCheck": true,
     "strict": true,
+    "strictPropertyInitialization": false,
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictBindCallApply": true,
     "noFallthroughCasesInSwitch": true,
-    "paths": {
-      "@welfare-ai/shared-types": ["../../packages/shared-types/src"],
-      "@welfare-ai/shared-types/*": ["../../packages/shared-types/src/*"],
-      "@welfare-ai/shared-utils": ["../../packages/shared-utils/src"],
-      "@welfare-ai/shared-utils/*": ["../../packages/shared-utils/src/*"],
-      "@welfare-ai/ontology-schema": ["../../packages/ontology-schema/src"],
-      "@welfare-ai/ontology-schema/*": ["../../packages/ontology-schema/src/*"]
-    }
+    "paths": {}
+
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]

@@ -2,8 +2,8 @@
   "name": "@welfare-ai/shared-types",
   "version": "0.0.1",
   "private": true,
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "type-check": "tsc --noEmit",
     "lint": "eslint src/**/*.ts"
