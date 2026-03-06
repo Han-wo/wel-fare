@@ -1,0 +1,43 @@
+# Dependencies
+**/node_modules
+**/.pnpm-store
+
+# Build outputs
+**/dist
+**/.next
+**/out
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Git
+.git
+.gitignore
+
+# Logs & debug
+**/*.log
+**/npm-debug.log*
+
+# Editor
+.vscode
+.idea
+**/*.swp
+**/*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+**/coverage
+**/__tests__
+**/*.test.ts
+**/*.spec.ts
+**/test/
+
+# Docs & misc
+docs/
+*.md
+!README.md
