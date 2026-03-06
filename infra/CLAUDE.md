@@ -7,6 +7,12 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1686 | 12:18 PM | 🟣 | Production Docker Deployment Infrastructure | ~707 |
+| #1685 | 11:42 AM | ✅ | Production Environment Configuration Template | ~552 |
+| #1684 | " | 🟣 | Production Docker Compose Stack | ~526 |
+| #1677 | 11:31 AM | 🔴 | Simplified Qdrant Healthcheck with TCP Socket Test | ~337 |
+| #1676 | 11:30 AM | 🔴 | Fixed Qdrant Container Healthcheck | ~322 |
+| #1675 | 11:29 AM | 🔴 | Qdrant Healthcheck Command Fix | ~288 |
 | #1628 | 11:13 AM | ✅ | PostgreSQL Extensions Initialization | ~298 |
 | #1627 | " | ✅ | Multi-Database Development Infrastructure | ~388 |
 </claude-mem-context>

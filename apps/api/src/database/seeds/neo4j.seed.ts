@@ -13,7 +13,7 @@ async function seedNeo4j() {
 
   const cypherPath = path.join(
     __dirname,
-    '../../../../packages/ontology-schema/src/seed-graph.cypher',
+    '../../../../../packages/ontology-schema/src/seed-graph.cypher',
   );
   const cypher = fs.readFileSync(cypherPath, 'utf-8');
 

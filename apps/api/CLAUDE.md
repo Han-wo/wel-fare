@@ -7,6 +7,8 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1686 | 12:18 PM | 🟣 | Production Docker Deployment Infrastructure | ~707 |
+| #1682 | 11:41 AM | 🟣 | Multi-Stage Production Dockerfile for NestJS API | ~187 |
 | #1671 | 11:26 AM | ✅ | LangSmith SDK Dependency Added | ~344 |
 | #1665 | 11:24 AM | 🟣 | LangSmith Observability Integration | ~380 |
 | #1659 | 11:21 AM | ✅ | Backend Environment Configuration | ~374 |

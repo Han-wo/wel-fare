@@ -30,3 +30,10 @@ npm-debug.log*
 
 # Docker volumes (로컬)
 infra/volumes/
+
+# CLAUDE
+CLAUDE.md
+
+
+apps/api/src/database/CLAUDE.md
+infra/CLAUDE.md

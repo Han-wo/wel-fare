@@ -7,6 +7,7 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1688 | 12:20 PM | 🔴 | Neo4j Seed Script Path Correction | ~302 |
 | #1661 | 11:21 AM | 🟣 | Qdrant Vector Database Initialization | ~463 |
 | #1660 | " | 🟣 | Neo4j Ontology Seeding Script | ~345 |
 </claude-mem-context>
