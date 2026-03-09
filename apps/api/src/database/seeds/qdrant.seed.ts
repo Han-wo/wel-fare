@@ -12,7 +12,7 @@ async function seedQdrant() {
 
   if (!exists) {
     await client.createCollection(collectionName, {
-      vectors: { size: 1536, distance: 'Cosine' },
+      vectors: { size: 3072, distance: 'Cosine' },
       optimizers_config: { default_segment_number: 2 },
     });
 

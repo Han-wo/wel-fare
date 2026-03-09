@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack --port 5173",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -40,6 +40,8 @@
     "recharts": "^2.0.0",
     "framer-motion": "^11.0.0",
     "date-fns": "^3.0.0",
+    "react-markdown": "^9.0.0",
+    "remark-gfm": "^4.0.0",
     "@welfare-ai/shared-types": "workspace:*",
     "@welfare-ai/shared-utils": "workspace:*",
     "@welfare-ai/ui": "workspace:*"

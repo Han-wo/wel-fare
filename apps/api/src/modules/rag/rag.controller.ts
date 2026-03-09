@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Request, Sse } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Request, Sse, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -14,6 +14,12 @@ interface MessageEvent {
 @Controller('rag')
 export class RagController {
   constructor(private readonly ragService: RagService) {}
+
+  @Get('suggestions')
+  @ApiOperation({ summary: '유저 프로필 기반 추천 질문 (Neo4j + Qdrant, AI 없음)' })
+  getSuggestions(@Request() req: { user: { id: string } }) {
+    return this.ragService.getSuggestions(req.user.id);
+  }
 
   @Sse('stream')
   @ApiOperation({ summary: 'AI 맞춤 복지 답변 스트리밍 (SSE)' })

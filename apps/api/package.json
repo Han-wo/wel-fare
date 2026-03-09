@@ -13,9 +13,18 @@
     "db:migrate": "typeorm migration:run -d src/database/data-source.ts",
     "db:migrate:create": "typeorm migration:create src/database/migrations/migration",
     "db:migrate:revert": "typeorm migration:revert -d src/database/data-source.ts",
-    "db:seed": "ts-node src/database/seeds/run-seeds.ts",
-    "db:seed:neo4j": "ts-node src/database/seeds/neo4j.seed.ts",
-    "db:seed:qdrant": "ts-node src/database/seeds/qdrant.seed.ts"
+    "db:seed": "ts-node -r dotenv/config src/database/seeds/run-seeds.ts",
+    "db:seed:neo4j": "ts-node -r dotenv/config src/database/seeds/neo4j.seed.ts",
+    "db:seed:qdrant": "ts-node -r dotenv/config src/database/seeds/qdrant.seed.ts",
+    "db:seed:welfare": "ts-node -r dotenv/config --transpile-only src/database/seeds/welfare-api.seed.ts",
+    "db:seed:local-welfare": "ts-node -r dotenv/config --transpile-only src/database/seeds/local-welfare.seed.ts",
+    "db:seed:housing": "ts-node -r dotenv/config --transpile-only src/database/seeds/rental-housing.seed.ts",
+    "db:seed:facility": "ts-node -r dotenv/config --transpile-only src/database/seeds/welfare-facility.seed.ts",
+    "db:seed:housing-anno": "ts-node -r dotenv/config --transpile-only src/database/seeds/housing-announcement.seed.ts",
+    "db:seed:admin": "ts-node -r dotenv/config --transpile-only src/database/seeds/admin.seed.ts",
+    "db:seed:applyhome": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome.seed.ts",
+    "db:seed:applyhome-cmpet": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-cmpet.seed.ts",
+    "db:seed:applyhome-stat": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-stat.seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -15,7 +15,8 @@
     "db:migrate": "pnpm --filter @welfare-ai/api run db:migrate",
     "db:seed": "pnpm --filter @welfare-ai/api run db:seed",
     "db:seed:neo4j": "pnpm --filter @welfare-ai/api run db:seed:neo4j",
-    "db:seed:qdrant": "pnpm --filter @welfare-ai/api run db:seed:qdrant"
+    "db:seed:qdrant": "pnpm --filter @welfare-ai/api run db:seed:qdrant",
+    "db:sync:all": "bash scripts/sync-all.sh"
   },
   "devDependencies": {
     "turbo": "^2.0.0",

@@ -1,6 +1,6 @@
 import { ofetch } from 'ofetch';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export const api = ofetch.create({
   baseURL: `${BASE_URL}/api/v1`,
@@ -17,6 +17,7 @@ export const api = ofetch.create({
   },
   onResponseError({ response }) {
     if (response.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('accessToken');
       window.location.href = '/login';
     }
   },

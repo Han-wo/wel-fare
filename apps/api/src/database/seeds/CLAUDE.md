@@ -10,4 +10,11 @@
 | #1688 | 12:20 PM | 🔴 | Neo4j Seed Script Path Correction | ~302 |
 | #1661 | 11:21 AM | 🟣 | Qdrant Vector Database Initialization | ~463 |
 | #1660 | " | 🟣 | Neo4j Ontology Seeding Script | ~345 |
+
+### Mar 7, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1808 | 10:49 PM | 🟣 | Added application links to welfare policy content | ~259 |
+| #1779 | 10:32 PM | 🔴 | Neo4j Parameter Loss Prevention in Welfare Facility Seed | ~279 |
 </claude-mem-context>

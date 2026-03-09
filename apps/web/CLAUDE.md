@@ -7,6 +7,7 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1701 | 1:03 PM | 🔴 | Fixed Workspace Package Resolution for Production Builds | ~525 |
 | #1686 | 12:18 PM | 🟣 | Production Docker Deployment Infrastructure | ~707 |
 | #1683 | 11:41 AM | 🟣 | Multi-Stage Docker Build for Next.js Frontend | ~512 |
 | #1681 | " | 🟣 | Next.js Standalone Build Configuration for Monorepo | ~418 |

@@ -15,6 +15,7 @@ import { ChatModule } from './modules/chat/chat.module';
 import { CrawlerModule } from './modules/crawler/crawler.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { BookmarksModule } from './modules/bookmarks/bookmarks.module';
+import { DataSyncModule } from './modules/data-sync/data-sync.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { BookmarksModule } from './modules/bookmarks/bookmarks.module';
     CrawlerModule,
     NotificationsModule,
     BookmarksModule,
+    DataSyncModule,
   ],
 })
 export class AppModule {}

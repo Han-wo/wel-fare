@@ -4,10 +4,9 @@ import path from 'path';
 const nextConfig: NextConfig = {
   output: 'standalone',
   transpilePackages: ['@welfare-ai/shared-types', '@welfare-ai/shared-utils', '@welfare-ai/ui'],
+  outputFileTracingRoot: path.join(__dirname, '../../'),
   experimental: {
-    // Allow standalone output to trace files from the monorepo root
-    // so shared packages (packages/*) are included in the bundle
-    outputFileTracingRoot: path.join(__dirname, '../../'),
+    optimizePackageImports: ['lucide-react'],
   },
 };
 

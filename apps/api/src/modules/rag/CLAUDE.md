@@ -7,6 +7,7 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
+| #1708 | 1:12 PM | 🔄 | Enhanced LangSmith Tracing Granularity in RAG Pipeline | ~472 |
 | #1670 | 11:26 AM | 🟣 | LangSmith Tracing Instrumentation for RAG Pipeline | ~501 |
 | #1669 | " | 🟣 | LangSmith Tracing Instrumentation in RAG Service | ~485 |
 | #1668 | 11:25 AM | 🟣 | LangSmith Tracing for Database Retrieval Operations | ~478 |
@@ -15,4 +16,18 @@
 | #1653 | " | 🟣 | RAG Service with Graph-Enhanced Vector Retrieval | ~571 |
 | #1652 | " | 🟣 | Server-Sent Events RAG Streaming Endpoint | ~430 |
 | #1651 | " | 🟣 | LangGraph RAG Pipeline with Hybrid Retrieval | ~682 |
+
+### Mar 7, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #1904 | 11:51 PM | 🟣 | Enhanced RAG prompt with graph-based context integration | ~378 |
+| #1887 | 11:43 PM | ✅ | Lowered RAG Document Relevance Threshold | ~302 |
+
+### Mar 8, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #2003 | 1:42 AM | ✅ | Removed Date Filter from ApplyHome Vector Search | ~279 |
+| #2002 | " | 🔄 | Simplified Housing Query Filtering in RAG Service | ~339 |
 </claude-mem-context>

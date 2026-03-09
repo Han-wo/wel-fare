@@ -15,10 +15,16 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
+  const isDev = configService.get('NODE_ENV') !== 'production';
   app.enableCors({
-    origin: configService.get('WEB_URL', 'http://localhost:3000'),
+    // 개발: 로컬 모든 포트 허용 (Next.js 포트가 바뀌어도 동작)
+    // 프로덕션: WEB_URL 환경변수로 명시적 도메인 제한
+    origin: isDev
+      ? /^http:\/\/localhost(:\d+)?$/
+      : configService.get('WEB_URL', 'http://localhost:3000'),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.setGlobalPrefix('api');
@@ -33,6 +39,8 @@ async function bootstrap() {
     }),
   );
 
+  const port = configService.get('PORT', 8000);
+
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
       .setTitle('WelfareAI API')
@@ -41,10 +49,9 @@ async function bootstrap() {
       .addBearerAuth()
       .build();
     SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));
-    logger.log('Swagger: http://localhost:3001/docs');
+    logger.log(`Swagger: http://localhost:${port}/docs`);
   }
 
-  const port = configService.get('PORT', 3001);
   await app.listen(port, '0.0.0.0');
   logger.log(`API running on: http://localhost:${port}`);
 }
