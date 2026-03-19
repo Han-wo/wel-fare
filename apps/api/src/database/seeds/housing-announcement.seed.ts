@@ -9,9 +9,15 @@ import axios from 'axios';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
-const API_KEY = process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://apis.data.go.kr/1613000/HWSPR02';
 const PAGE_SIZE = 1000; // 데이터 적어서 한 번에 수집
 const EMBED_BATCH = 50;
@@ -22,10 +28,10 @@ const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
     process.env.NEO4J_USERNAME ?? 'neo4j',
-    process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass',
+    getRequiredEnv('NEO4J_PASSWORD'),
   ),
 );
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 // ── 타입 ─────────────────────────────────────────────────
 interface AnnouncementItem {
@@ -44,6 +50,8 @@ interface AnnouncementItem {
   pcUrl: string;
   type: 'rental' | 'sale';
 }
+
+type PreparedAnnouncement = PreparedSyncItem<AnnouncementItem>;
 
 // ── 유틸 ─────────────────────────────────────────────────
 function formatDate(d: string): string {
@@ -118,13 +126,36 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
+function prepareAnnouncements(items: AnnouncementItem[]): PreparedAnnouncement[] {
+  return items.map((item) => {
+    const policyId = `anno_${item.type}_${item.pblancId}_${item.houseSn}`;
+    const content = buildPageContent(item);
+    return {
+      item,
+      policyId,
+      graphId: policyId,
+      content,
+      syncHash: makeSyncHash({
+        policyId,
+        content,
+        status: item.sttusNm,
+        supplyType: item.suplyTyNm,
+        houseType: item.houseTyNm,
+        winnerDate: item.przwnerPresnatnDe,
+        supplyCount: item.suplyHoCo,
+        url: item.url,
+      }),
+    };
+  });
+}
+
 // ── Qdrant upsert (retry) ─────────────────────────────────
-async function upsertToQdrant(items: AnnouncementItem[], embeddings: number[][]): Promise<void> {
-  const points = items.map((a, i) => ({
+async function upsertToQdrant(items: PreparedAnnouncement[], embeddings: number[][]): Promise<void> {
+  const points = items.map(({ item: a, policyId, content, syncHash }, i) => ({
     id: annoPointId(a.pblancId, a.houseSn, a.type),
     vector: embeddings[i],
     payload: {
-      policyId: `anno_${a.type}_${a.pblancId}_${a.houseSn}`,
+      policyId,
       policyName: a.pblancNm,
       category: a.type === 'rental' ? '공공임대주택 모집공고' : '공공분양주택 모집공고',
       ministry: a.suplyInsttNm,
@@ -133,10 +164,11 @@ async function upsertToQdrant(items: AnnouncementItem[], embeddings: number[][])
       annoDate: a.rcritPblancDe,
       winnerDate: a.przwnerPresnatnDe,
       supplyCount: a.suplyHoCo,
-      content: buildPageContent(a),
+      content,
       status: 'active',
       source: 'myhome_announcement',
       url: a.url,
+      syncHash,
     },
   }));
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -151,11 +183,10 @@ async function upsertToQdrant(items: AnnouncementItem[], embeddings: number[][])
 }
 
 // ── Neo4j upsert (레코드별 오류 격리) ─────────────────────
-async function upsertToNeo4j(items: AnnouncementItem[]): Promise<void> {
+async function upsertToNeo4j(items: PreparedAnnouncement[]): Promise<void> {
   const session = neo4jDriver.session();
   try {
-    for (const a of items) {
-      const id = `anno_${a.type}_${a.pblancId}_${a.houseSn}`;
+    for (const { item: a, policyId: id, syncHash } of items) {
       const name = a.pblancNm ?? '';
       const insttNm = a.suplyInsttNm ?? '';
       const suplyTyNm = a.suplyTyNm ?? '';
@@ -169,9 +200,19 @@ async function upsertToNeo4j(items: AnnouncementItem[]): Promise<void> {
           SET ann.name = $name, ann.insttNm = $insttNm,
               ann.suplyTyNm = $suplyTyNm, ann.houseTyNm = $houseTyNm,
               ann.annoDate = $annoDate, ann.annoType = $annoType,
-              ann.source = 'myhome_announcement', ann.updatedAt = datetime()
+              ann.source = 'myhome_announcement', ann.announcementSyncHash = $syncHash,
+              ann.updatedAt = datetime()
           `,
-          { id, name, insttNm, suplyTyNm, houseTyNm, annoDate: a.rcritPblancDe ?? '', annoType },
+          {
+            id,
+            name,
+            insttNm,
+            suplyTyNm,
+            houseTyNm,
+            annoDate: a.rcritPblancDe ?? '',
+            annoType,
+            syncHash,
+          },
         );
         if (insttNm) {
           await session.run(
@@ -201,22 +242,55 @@ async function main() {
   const allItems = [...rentalItems, ...saleItems];
   console.log(`   총 ${allItems.length}건`);
 
+  const prepared = prepareAnnouncements(allItems);
+  const plan = await buildIncrementalSyncPlan({
+    client: qdrant,
+    collectionName: COLLECTION,
+    preparedItems: prepared,
+    driver: neo4jDriver,
+    graphLabel: 'HousingAnnouncement',
+    graphHashProperty: 'announcementSyncHash',
+  });
+  console.log(
+    `   증분 대상 - 벡터 ${plan.vectorUpdates.length}건, 그래프 ${plan.graphUpdates.length}건, 스킵 ${plan.skippedCount}건`,
+  );
+
+  if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
+    console.log('✅ 변경 없음');
+    return;
+  }
+
   console.log('🔍 임베딩 + 저장 중...');
-  let done = 0;
-  for (let i = 0; i < allItems.length; i += EMBED_BATCH) {
-    const batch = allItems.slice(i, i + EMBED_BATCH);
-    const texts = batch.map(buildPageContent);
-    const embeddings = await embedTexts(texts);
+  const graphUpdateIds = new Set(plan.graphUpdates.map((item) => item.policyId));
+  let vectorDone = 0;
+  for (let i = 0; i < plan.vectorUpdates.length; i += EMBED_BATCH) {
+    const batch = plan.vectorUpdates.slice(i, i + EMBED_BATCH);
+    const embeddings = await embedTexts(batch.map((item) => item.content));
+    const graphBatch = batch.filter((item) => graphUpdateIds.has(item.policyId));
     await Promise.all([
       upsertToQdrant(batch, embeddings),
-      upsertToNeo4j(batch),
+      graphBatch.length > 0 ? upsertToNeo4j(graphBatch) : Promise.resolve(),
     ]);
-    done += batch.length;
-    process.stdout.write(`   [${done}/${allItems.length}] 처리 완료\r`);
+    vectorDone += batch.length;
+    process.stdout.write(`   벡터 [${vectorDone}/${plan.vectorUpdates.length}] 처리 완료\r`);
   }
-  console.log(`\n🎉 공공주택 모집공고 ${allItems.length}건 적재 완료!`);
+
+  if (plan.graphOnlyUpdates.length > 0) {
+    let graphDone = 0;
+    for (let i = 0; i < plan.graphOnlyUpdates.length; i += EMBED_BATCH) {
+      const batch = plan.graphOnlyUpdates.slice(i, i + EMBED_BATCH);
+      await upsertToNeo4j(batch);
+      graphDone += batch.length;
+      process.stdout.write(`   그래프 [${graphDone}/${plan.graphOnlyUpdates.length}] 처리 완료\r`);
+    }
+  }
+
+  console.log(`\n🎉 공공주택 모집공고 증분 동기화 완료!`);
 }
 
 main()
-  .catch(console.error)
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
   .finally(async () => { await neo4jDriver.close(); });

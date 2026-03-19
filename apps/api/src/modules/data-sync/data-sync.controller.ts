@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DataSyncService } from './data-sync.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -40,7 +40,26 @@ export class DataSyncController {
   @ApiOperation({ summary: '데이터 동기화 수동 트리거 (비동기 실행)' })
   triggerSync() {
     // 논블로킹으로 실행
-    this.dataSyncService.runSync().catch(() => {});
+    this.dataSyncService.runSync('MANUAL').catch(() => {});
     return { message: '동기화 시작됨. GET /api/v1/admin/stats 에서 상태 확인 가능' };
+  }
+
+  @Get('sync/logs')
+  @ApiOperation({ summary: '최근 데이터 동기화 로그 조회' })
+  getRecentLogs(@Query('limit', new ParseIntPipe({ optional: true })) limit?: number) {
+    return this.dataSyncService.getRecentLogs(limit);
+  }
+
+  @Get('sync/sources')
+  @ApiOperation({ summary: '동기화 가능한 데이터 소스 목록 조회' })
+  getSyncSources() {
+    return this.dataSyncService.getSeedCatalog();
+  }
+
+  @Post('sync/seeds/:key')
+  @ApiOperation({ summary: '개별 시드 동기화 수동 트리거 (비동기 실행)' })
+  triggerSeed(@Param('key') key: string) {
+    this.dataSyncService.runSeed(key, 'SEED').catch(() => {});
+    return { message: `${key} 시드 동기화 시작됨. GET /api/v1/admin/sync/logs 에서 상태 확인 가능` };
   }
 }

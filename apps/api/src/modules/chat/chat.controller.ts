@@ -24,12 +24,34 @@ export class ChatController {
   }
 
   @Get('sessions/:id/messages')
-  getMessages(@Param('id') id: string) {
-    return this.chatService.getMessages(id);
+  getMessages(
+    @Request() req: { user: { id: string } },
+    @Param('id') id: string,
+  ) {
+    return this.chatService.getMessages(req.user.id, id);
+  }
+
+  @Post('sessions/:id/open')
+  openSession(
+    @Request() req: { user: { id: string } },
+    @Param('id') id: string,
+  ) {
+    return this.chatService.openSession(req.user.id, id);
+  }
+
+  @Post('sessions/:id/close')
+  closeSession(
+    @Request() req: { user: { id: string } },
+    @Param('id') id: string,
+  ) {
+    return this.chatService.closeSession(req.user.id, id);
   }
 
   @Delete('sessions/:id')
-  deleteSession(@Param('id') id: string) {
-    return this.chatService.deleteSession(id);
+  deleteSession(
+    @Request() req: { user: { id: string } },
+    @Param('id') id: string,
+  ) {
+    return this.chatService.deleteSession(req.user.id, id);
   }
 }

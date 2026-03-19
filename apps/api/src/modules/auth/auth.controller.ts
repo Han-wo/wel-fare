@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UnauthorizedException } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -20,5 +20,13 @@ export class AuthController {
   @ApiOperation({ summary: '이메일 로그인' })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto.email, dto.password);
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Access Token 재발급' })
+  refresh(@Body('refreshToken') refreshToken: string) {
+    if (!refreshToken) throw new UnauthorizedException('refreshToken이 필요합니다');
+    return this.authService.refresh(refreshToken);
   }
 }

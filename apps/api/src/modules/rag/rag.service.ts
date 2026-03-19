@@ -7,27 +7,50 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import { Driver } from 'neo4j-driver';
 import { Document } from '@langchain/core/documents';
 import { traceable } from 'langsmith/traceable';
-import { createRagGraph } from './rag.graph';
+import { createRagGraph, RagServices } from './rag.graph';
+import { createEligibilityGraph } from './eligibility.graph';
+import { createApplicationAssistGraph } from './application-assist.graph';
+import { RagTraceService } from './rag-trace.service';
+import type { RagTraceEdge, RagTraceNode } from './entities/rag-trace.entity';
 import { UserProfile } from '../profile/entities/user-profile.entity';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
+import { ChatSession } from '../chat/entities/chat-session.entity';
+import { ChatRuntimeService } from '../chat/chat-runtime.service';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
 import type { UserProfile as UserProfileType } from '@welfare-ai/shared-types';
+import { RagRouterService, type RagRouteType } from './rag-router.service';
 
 export const NEO4J_DRIVER = 'NEO4J_DRIVER';
+
+export type RagStreamEvent =
+  | { type: 'session_created'; data: string }
+  | { type: 'think'; data: '' }
+  | { type: 'text'; data: string }
+  | { type: 'done'; data: '' };
 
 @Injectable()
 export class RagService {
   private readonly logger = new Logger(RagService.name);
   private readonly embeddings: OpenAIEmbeddings;
   private readonly qdrantClient: QdrantClient;
-  private readonly ragGraph: ReturnType<typeof createRagGraph>;
+  private readonly searchGraph: ReturnType<typeof createRagGraph>;
+  private readonly eligibilityGraph: ReturnType<typeof createEligibilityGraph>;
+  private readonly applicationAssistGraph: ReturnType<typeof createApplicationAssistGraph>;
+  private readonly collectionName: string;
   // 추천 질문 캐시: userId → { data, expiresAt } (5분 TTL)
   private readonly suggestionsCache = new Map<string, { data: string[]; expiresAt: number }>();
+  // 온톨로지 추론 캐시: userId → { ids, expiresAt } (10분 TTL)
+  // inferFromOntology는 프로필 기반 고정 결과 → 동일 유저 반복 호출 시 Neo4j 조회 생략
+  private readonly ontologyCache = new Map<string, { ids: string[]; expiresAt: number }>();
 
   constructor(
     @Inject(NEO4J_DRIVER) private readonly neo4jDriver: Driver,
     @InjectRepository(UserProfile) private profileRepo: Repository<UserProfile>,
     @InjectRepository(ChatMessage) private messageRepo: Repository<ChatMessage>,
+    @InjectRepository(ChatSession) private sessionRepo: Repository<ChatSession>,
+    private readonly ragTrace: RagTraceService,
+    private readonly chatRuntime: ChatRuntimeService,
+    private readonly ragRouter: RagRouterService,
     private config: ConfigService,
   ) {
     // wrapSDK: OpenAI 임베딩 호출도 LangSmith 트레이스에 포착
@@ -40,57 +63,117 @@ export class RagService {
       url: this.config.get('QDRANT_URL', 'http://localhost:6333'),
     });
 
-    this.ragGraph = createRagGraph({
+    this.collectionName = this.config.get('QDRANT_COLLECTION', 'welfare_policies');
+
+    const services: RagServices = {
       getProfile: this.getProfile.bind(this),
       inferFromOntology: traceable(this.inferFromOntology.bind(this), {
         name: 'neo4j_ontology_infer',
         run_type: 'retriever',
         tags: ['neo4j', 'ontology', 'cypher'],
       }),
-      searchVectors: traceable(this.searchVectors.bind(this), {
-        name: 'qdrant_vector_search',
-        run_type: 'retriever',
-        tags: ['qdrant', 'vector-search'],
-      }),
       enrichWithGraph: traceable(this.enrichWithGraphData.bind(this), {
         name: 'neo4j_graph_enrich',
         run_type: 'retriever',
         tags: ['neo4j', 'graph', 'cypher'],
       }),
-      searchHousing: this.searchHousingData.bind(this),
+      searchVectors: traceable(this.searchVectors.bind(this), {
+        name: 'qdrant_vector_search',
+        run_type: 'retriever',
+        tags: ['qdrant', 'vector-search'],
+      }),
+      searchYouthPolicies: traceable(this.searchYouthPolicies.bind(this), {
+        name: 'qdrant_youth_search',
+        run_type: 'retriever',
+        tags: ['qdrant', 'youth'],
+      }),
+      searchByPolicyName: traceable(this.searchByPolicyName.bind(this), {
+        name: 'qdrant_policy_name_search',
+        run_type: 'retriever',
+        tags: ['qdrant', 'eligibility'],
+      }),
+      searchHousingSubscriptions: traceable(this.searchHousingSubscriptions.bind(this), {
+        name: 'housing_subscription_search',
+        run_type: 'retriever',
+        tags: ['neo4j', 'qdrant', 'housing-subscription'],
+      }),
+      searchRentalSupport: traceable(this.searchRentalSupport.bind(this), {
+        name: 'rental_support_search',
+        run_type: 'retriever',
+        tags: ['qdrant', 'lh-housing', 'rental'],
+      }),
+      searchWelfareFacilities: traceable(this.searchWelfareFacilities.bind(this), {
+        name: 'welfare_facility_search',
+        run_type: 'retriever',
+        tags: ['qdrant', 'welfare-facility'],
+      }),
+      getUpcomingDeadlines: traceable(this.getUpcomingDeadlines.bind(this), {
+        name: 'upcoming_deadlines',
+        run_type: 'retriever',
+        tags: ['neo4j', 'deadline'],
+      }),
       loadHistory: this.loadChatHistory.bind(this),
       saveMessage: this.saveAssistantMessage.bind(this),
+      recordContext: this.ragTrace.recordContext.bind(this.ragTrace),
+      recordEvent: this.ragTrace.addEvent.bind(this.ragTrace),
+      recordToolSelection: this.ragTrace.recordToolSelection.bind(this.ragTrace),
       calcAge,
       getSidoName,
-    });
+    };
+
+    this.searchGraph = createRagGraph(services);
+    this.eligibilityGraph = createEligibilityGraph(services);
+    this.applicationAssistGraph = createApplicationAssistGraph(services);
   }
 
   async *streamAnswer(
     userId: string,
     sessionId: string,
     question: string,
-  ): AsyncGenerator<string> {
-    const tokens: string[] = [];
+  ): AsyncGenerator<RagStreamEvent> {
+    await this.ensureSessionOwnership(userId, sessionId);
+    this.chatRuntime.openSession(sessionId);
+    await this.saveUserMessage(sessionId, question);
+
+    const traceId = this.ragTrace.startTrace({
+      sessionId,
+      userId,
+      question,
+      model: this.config.get('OPENAI_CHAT_MODEL', 'gpt-5-mini'),
+    });
+    const routeDecision = this.ragRouter.resolve(question);
+    this.ragTrace.setRouteType(traceId, {
+      routeType: routeDecision.routeType,
+      detail: routeDecision.detail,
+    });
+    const streamToken = this.chatRuntime.startStream(sessionId);
+    const events: RagStreamEvent[] = [
+      { type: 'session_created', data: sessionId },
+      { type: 'think', data: '' },
+    ];
     let resolver: (() => void) | null = null;
     let done = false;
+    let emittedText = false;
 
     const streamCallback = (token: string) => {
-      tokens.push(token);
+      if (this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+        return;
+      }
+
+      emittedText = true;
+      events.push({ type: 'text', data: token });
       resolver?.();
     };
 
-    this.ragGraph
+    this.getGraphForRoute(routeDecision.routeType)
       .invoke(
         {
           question,
           userId,
           sessionId,
+          traceId,
+          messages: [],
           profile: null,
-          chatHistory: [],
-          candidatePolicyIds: [],
-          documents: [],
-          filteredDocuments: [],
-          graphContext: '',
           answer: '',
           streamCallback,
         },
@@ -98,29 +181,73 @@ export class RagService {
           // LangSmith 대시보드에서 이 이름으로 최상위 트레이스가 표시됨
           runName: 'welfare-rag-pipeline',
           tags: ['welfare-ai', 'rag', 'langgraph'],
-          metadata: { userId, sessionId },
+          metadata: { userId, sessionId, traceId },
         },
       )
-      .then(() => {
+      .then(async (result) => {
+        const answer = typeof result?.answer === 'string' ? result.answer : '';
+        if (answer && !emittedText && !this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+          events.push({ type: 'text', data: answer });
+        }
+        if (answer) {
+          this.ragTrace.recordAnswer(traceId, answer);
+        }
+        await this.ragTrace.finalizeTrace(traceId, {
+          status: 'SUCCESS',
+          answer: answer || null,
+        });
         done = true;
+        events.push({ type: 'done', data: '' });
         resolver?.();
       })
-      .catch((err) => {
+      .catch(async (err) => {
         this.logger.error('RAG 파이프라인 오류:', err);
-        tokens.push(`\n\n⚠️ 오류가 발생했습니다: ${(err as Error).message}`);
+        this.ragTrace.recordError(traceId, (err as Error).message);
+        await this.ragTrace.finalizeTrace(traceId, {
+          status: 'FAILED',
+          error: (err as Error).message,
+        });
+        events.push({ type: 'text', data: `\n\n⚠️ 오류가 발생했습니다: ${(err as Error).message}` });
         done = true;
+        events.push({ type: 'done', data: '' });
         resolver?.();
       });
 
-    while (!done || tokens.length > 0) {
-      if (tokens.length > 0) {
-        yield tokens.shift()!;
-      } else {
+    try {
+      while ((!done || events.length > 0) && !this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+        if (events.length > 0) {
+          yield events.shift()!;
+          continue;
+        }
+
         await new Promise<void>((r) => {
           resolver = r;
+          this.chatRuntime.setWakeHandler(sessionId, streamToken, r);
         });
         resolver = null;
+        this.chatRuntime.setWakeHandler(sessionId, streamToken);
       }
+
+      if (!done && this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+        await this.ragTrace.finalizeTrace(traceId, {
+          status: 'ABORTED',
+        });
+        yield { type: 'done', data: '' };
+      }
+    } finally {
+      this.chatRuntime.finishStream(sessionId, streamToken);
+    }
+  }
+
+  private getGraphForRoute(routeType: RagRouteType) {
+    switch (routeType) {
+      case 'ELIGIBILITY':
+        return this.eligibilityGraph;
+      case 'APPLICATION_ASSIST':
+        return this.applicationAssistGraph;
+      case 'SEARCH':
+      default:
+        return this.searchGraph;
     }
   }
 
@@ -133,7 +260,13 @@ export class RagService {
   private async inferFromOntology(
     profile: UserProfileType,
     _question: string,
+    traceId?: string,
   ): Promise<string[]> {
+    // 캐시 확인: 프로필 기반 결과는 10분간 재사용 (Neo4j 조회 생략)
+    const cacheKey = profile.userId ?? '';
+    const cached = this.ontologyCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.ids;
+
     const session = this.neo4jDriver.session();
     try {
       const age = profile.birthDate ? calcAge(profile.birthDate) : 30;
@@ -144,18 +277,21 @@ export class RagService {
         `
         MATCH (p:Policy)
         OPTIONAL MATCH (p)-[:TARGETS_LIFE_STAGE]->(l:LifeStage {name: $lifeStage})
-        WITH p, count(l) > 0 AS hasLifeStage
+        WITH p, collect(DISTINCT l.name) AS lifeStages
         OPTIONAL MATCH (p)-[:AVAILABLE_IN]->(r:Region {code: $sidoCode})
-        WITH p, hasLifeStage, count(r) > 0 AS hasRegion
+        WITH p, lifeStages, collect(DISTINCT r.name) AS regions
         OPTIONAL MATCH (p)-[:TARGETS_GROUP]->(g:TargetGroup) WHERE g.name IN $targetGroups
-        WITH p, hasLifeStage, hasRegion, count(g) > 0 AS hasGroup
+        WITH p, lifeStages, regions, collect(DISTINCT g.name) AS targetGroups
         WITH p,
-          CASE WHEN hasLifeStage THEN 2 ELSE 0 END +
-          CASE WHEN hasRegion   THEN 1 ELSE 0 END +
-          CASE WHEN hasGroup    THEN 2 ELSE 0 END AS matchScore
+          lifeStages,
+          regions,
+          targetGroups,
+          CASE WHEN size(lifeStages) > 0 THEN 2 ELSE 0 END +
+          CASE WHEN size(regions) > 0 THEN 1 ELSE 0 END +
+          CASE WHEN size(targetGroups) > 0 THEN 2 ELSE 0 END AS matchScore
         WHERE matchScore > 0
         ORDER BY matchScore DESC
-        RETURN p.id AS policyId
+        RETURN p.id AS policyId, p.name AS policyName, lifeStages, regions, targetGroups, matchScore
         LIMIT 50
         `,
         {
@@ -164,7 +300,117 @@ export class RagService {
           targetGroups: targetGroups.length > 0 ? targetGroups : ['__none__'],
         },
       );
-      return result.records.map((r) => r.get('policyId') as string);
+      const ids = result.records.map((r) => r.get('policyId') as string);
+      if (traceId) {
+        const age = profile.birthDate ? calcAge(profile.birthDate) : 30;
+        const criteriaNodes: RagTraceNode[] = [
+          { id: `profile:${traceId}`, label: '사용자 프로필', kind: 'profile' },
+          { id: `criteria:${traceId}:lifeStage:${lifeStage}`, label: lifeStage, kind: 'LifeStage' },
+        ];
+        const criteriaEdges: RagTraceEdge[] = [
+          {
+            id: `profile:${traceId}->criteria:${traceId}:lifeStage:${lifeStage}:HAS_LIFE_STAGE`,
+            source: `profile:${traceId}`,
+            target: `criteria:${traceId}:lifeStage:${lifeStage}`,
+            label: 'HAS_LIFE_STAGE',
+          },
+        ];
+
+        if (profile.sidoCode) {
+          criteriaNodes.push({
+            id: `criteria:${traceId}:region:${profile.sidoCode}`,
+            label: getSidoName(profile.sidoCode),
+            kind: 'Region',
+          });
+          criteriaEdges.push({
+            id: `profile:${traceId}->criteria:${traceId}:region:${profile.sidoCode}:IN_REGION`,
+            source: `profile:${traceId}`,
+            target: `criteria:${traceId}:region:${profile.sidoCode}`,
+            label: 'IN_REGION',
+          });
+        }
+
+        for (const group of targetGroups) {
+          criteriaNodes.push({
+            id: `criteria:${traceId}:group:${group}`,
+            label: group,
+            kind: 'TargetGroup',
+          });
+          criteriaEdges.push({
+            id: `profile:${traceId}->criteria:${traceId}:group:${group}:HAS_GROUP`,
+            source: `profile:${traceId}`,
+            target: `criteria:${traceId}:group:${group}`,
+            label: 'HAS_GROUP',
+          });
+        }
+
+        const policyNodes: RagTraceNode[] = [];
+        const policyEdges: RagTraceEdge[] = [];
+        const topPolicies: Array<{ id: string; name: string; score: number }> = [];
+
+        for (const record of result.records.slice(0, 12)) {
+          const policyId = record.get('policyId') as string;
+          const policyName = record.get('policyName') as string;
+          const matchedLifeStages = (record.get('lifeStages') as string[]).filter(Boolean);
+          const matchedRegions = (record.get('regions') as string[]).filter(Boolean);
+          const matchedGroups = (record.get('targetGroups') as string[]).filter(Boolean);
+          const matchScore = Number(record.get('matchScore') as number);
+
+          topPolicies.push({ id: policyId, name: policyName, score: matchScore });
+          policyNodes.push({
+            id: policyNodeId(policyId),
+            label: policyName,
+            kind: 'Policy',
+            score: matchScore,
+          });
+
+          for (const value of matchedLifeStages) {
+            policyEdges.push({
+              id: `criteria:${traceId}:lifeStage:${value}->${policyNodeId(policyId)}:TARGETS_LIFE_STAGE`,
+              source: `criteria:${traceId}:lifeStage:${value}`,
+              target: policyNodeId(policyId),
+              label: 'TARGETS_LIFE_STAGE',
+            });
+          }
+
+          for (const value of matchedRegions) {
+            const regionId = `criteria:${traceId}:region:${profile.sidoCode ?? value}`;
+            policyEdges.push({
+              id: `${regionId}->${policyNodeId(policyId)}:AVAILABLE_IN`,
+              source: regionId,
+              target: policyNodeId(policyId),
+              label: 'AVAILABLE_IN',
+            });
+          }
+
+          for (const value of matchedGroups) {
+            policyEdges.push({
+              id: `criteria:${traceId}:group:${value}->${policyNodeId(policyId)}:TARGETS_GROUP`,
+              source: `criteria:${traceId}:group:${value}`,
+              target: policyNodeId(policyId),
+              label: 'TARGETS_GROUP',
+            });
+          }
+        }
+
+        this.ragTrace.recordGraphWalk(traceId, {
+          title: 'Neo4j 프로필 그래프 매칭',
+          detail: `${age}세 · ${lifeStage} 기준으로 ${ids.length}개 정책 후보를 추렸습니다.`,
+          nodes: [...criteriaNodes, ...policyNodes],
+          edges: [...criteriaEdges, ...policyEdges],
+          payload: {
+            topPolicies,
+            lifeStage,
+            targetGroups,
+            region: profile.sidoCode ? getSidoName(profile.sidoCode) : null,
+          },
+        });
+      }
+      // 결과 캐시 (10분 TTL)
+      if (cacheKey) {
+        this.ontologyCache.set(cacheKey, { ids, expiresAt: Date.now() + 10 * 60 * 1000 });
+      }
+      return ids;
     } catch {
       return [];
     } finally {
@@ -172,22 +418,27 @@ export class RagService {
     }
   }
 
-  private async searchVectors(question: string, policyIds: string[]): Promise<Document[]> {
-    const collectionName = this.config.get('QDRANT_COLLECTION', 'welfare_policies');
+  private async searchVectors(question: string, policyIds: string[], traceId?: string): Promise<Document[]> {
     const queryVector = await this.embeddings.embedQuery(question);
-
-    // Qdrant = 순수 semantic search. 구조화 필터(지역·날짜)는 Neo4j에서 처리.
-    const searchResult = await this.qdrantClient.search(collectionName, {
+    // policyIds가 있으면 Neo4j 온톨로지 매칭 결과로 필터
+    // 없으면 bokjiro/local_bokjiro 소스만 검색 (타 소스 오염 방지)
+    const filter =
+      policyIds.length > 0
+        ? { must: [{ key: 'policyId', match: { any: policyIds } }] }
+        : {
+            should: [
+              { key: 'source', match: { value: 'bokjiro' } },
+              { key: 'source', match: { value: 'local_bokjiro' } },
+            ],
+          };
+    const searchResult = await this.qdrantClient.search(this.collectionName, {
       vector: queryVector,
       limit: 8,
-      filter:
-        policyIds.length > 0
-          ? { must: [{ key: 'policyId', match: { any: policyIds } }] }
-          : undefined,
+      filter,
       with_payload: true,
       score_threshold: 0.4,
     });
-
+    this.traceVectorSearch(traceId, 'Qdrant 일반 복지 검색', question, searchResult, filter);
     return searchResult.map((r) => ({
       pageContent: (r.payload?.content as string) ?? '',
       metadata: { ...r.payload, score: r.score },
@@ -211,11 +462,10 @@ export class RagService {
     // 1. 프로필 텍스트를 임베딩 → Qdrant 유사 정책 검색
     const profileText = buildProfileText(profile, age);
     const queryVector = await this.embeddings.embedQuery(profileText);
-    const collectionName = this.config.get('QDRANT_COLLECTION', 'welfare_policies');
 
     const [qdrantResults, neo4jPolicyNames] = await Promise.all([
       this.qdrantClient
-        .search(collectionName, { vector: queryVector, limit: 8, with_payload: true, score_threshold: 0.45 })
+        .search(this.collectionName, { vector: queryVector, limit: 8, with_payload: true, score_threshold: 0.45 })
         .catch(() => []),
       this.queryNeo4jPolicyNames(profile, age),
     ]);
@@ -284,20 +534,58 @@ export class RagService {
   }
 
   /**
-   * 청약·임대·주택 관련 질문 → Neo4j 그래프에서 구조화 조회
-   * (날짜·지역 필터는 그래프에서 처리, Qdrant는 semantic search 전용)
+   * 청년정책 전용 Qdrant 검색 (source: 'youth_center')
+   * - 일반 복지보다 임계값을 낮게 설정해 청년정책 커버리지 확대
    */
-  async searchHousingData(question: string, sidoCode: string): Promise<Document[]> {
-    const isHousingQuery = /청약|임대|주택|입주|분양|행복주택|국민임대|매입임대|전세임대|공공주택|LH|SH/.test(question);
-    if (!isHousingQuery) return [];
+  async searchYouthPolicies(question: string, traceId?: string): Promise<Document[]> {
+    const queryVector = await this.embeddings.embedQuery(question);
+    const searchResult = await this.qdrantClient.search(this.collectionName, {
+      vector: queryVector,
+      limit: 6,
+      filter: { must: [{ key: 'source', match: { value: 'youth_center' } }] },
+      with_payload: true,
+      score_threshold: 0.35,
+    });
+    this.traceVectorSearch(traceId, 'Qdrant 청년정책 검색', question, searchResult, {
+      must: [{ key: 'source', match: { value: 'youth_center' } }],
+    });
+    return searchResult.map((r) => ({
+      pageContent: (r.payload?.content as string) ?? '',
+      metadata: { ...r.payload, score: r.score },
+    }));
+  }
 
+  /**
+   * 정책명 기반 상세 조회 (적격 여부 확인용)
+   * - 모든 소스 대상, 임계값 높게 설정해 정확한 매칭 우선
+   */
+  async searchByPolicyName(policyName: string, traceId?: string): Promise<Document[]> {
+    const queryVector = await this.embeddings.embedQuery(policyName);
+    const searchResult = await this.qdrantClient.search(this.collectionName, {
+      vector: queryVector,
+      limit: 3,
+      with_payload: true,
+      score_threshold: 0.5,
+    });
+    this.traceVectorSearch(traceId, '정책명 기반 적격성 검색', policyName, searchResult);
+    return searchResult.map((r) => ({
+      pageContent: (r.payload?.content as string) ?? '',
+      metadata: { ...r.payload, score: r.score },
+    }));
+  }
+
+  /**
+   * 청약·분양 공고 검색
+   * - Neo4j HousingAnnouncement (구조화 데이터, 날짜·지역 필터)
+   * - Qdrant applyhome + myhome_announcement (벡터 semantic 검색)
+   */
+  async searchHousingSubscriptions(question: string, sidoCode: string, traceId?: string): Promise<Document[]> {
     const docs: Document[] = [];
 
-    // ── 세션 1: HousingAnnouncement 조회 ─────────────────────
-    // EXISTS {} 대신 collect() → WHERE IN 패턴으로 Neo4j 호환성 확보
-    const session1 = this.neo4jDriver.session();
+    // ── Neo4j HousingAnnouncement ─────────────────────────────
+    const session = this.neo4jDriver.session();
     try {
-      const annoRes = await session1.run(
+      const annoRes = await session.run(
         `
         MATCH (a:HousingAnnouncement)
         WHERE a.annoDate >= '2025'
@@ -314,35 +602,149 @@ export class RagService {
       for (const record of annoRes.records) {
         const a = record.get('a').properties as Record<string, string>;
         const regionNames = (record.get('regionNames') as string[]).filter(Boolean);
-        const lines = [
-          `[정책명] ${a.name}`,
-          `[유형] ${a.suplyTyNm || '청약'} (${a.houseTyNm || '공고 참조'})`,
-          regionNames.length ? `[청약지역] ${regionNames.join(', ')}` : '',
-          `[공급세대수] ${a.suplyHoCo || ''}세대`,
-          `[주소] ${a.address || ''}`,
-          a.annoDate ? `[모집공고일] ${a.annoDate}` : '',
-          a.subscptBgnde ? `[청약접수] ${a.subscptBgnde} ~ ${a.subscptEndde || ''}` : '',
-          a.winnerDate ? `[당첨자발표] ${a.winnerDate}` : '',
-          a.moveInYM ? `[입주예정] ${a.moveInYM}` : '',
-          `[시행기관] ${a.insttNm || ''}`,
-          `[신청링크] ${a.pcUrl || 'https://www.applyhome.co.kr'}`,
-        ].filter(Boolean);
         docs.push({
-          pageContent: lines.join('\n'),
+          pageContent: [
+            `[공고명] ${a.name}`,
+            `[유형] ${a.suplyTyNm || '청약'} (${a.houseTyNm || '공고 참조'})`,
+            regionNames.length ? `[청약지역] ${regionNames.join(', ')}` : '',
+            `[공급세대수] ${a.suplyHoCo || ''}세대`,
+            a.annoDate ? `[모집공고일] ${a.annoDate}` : '',
+            a.subscptBgnde ? `[청약접수] ${a.subscptBgnde} ~ ${a.subscptEndde || ''}` : '',
+            a.winnerDate ? `[당첨자발표] ${a.winnerDate}` : '',
+            a.moveInYM ? `[입주예정] ${a.moveInYM}` : '',
+            `[시행기관] ${a.insttNm || ''}`,
+            `[신청링크] ${a.pcUrl || 'https://www.applyhome.co.kr'}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
           metadata: { policyId: a.id, source: 'housing_announcement', score: 0.9 },
+        });
+      }
+      if (traceId) {
+        this.ragTrace.recordGraphWalk(traceId, {
+          title: 'Neo4j 청약 공고 탐색',
+          detail: `${annoRes.records.length}개의 모집공고 노드를 조회했습니다.`,
+          nodes: annoRes.records.flatMap((record) => {
+            const announcement = record.get('a').properties as Record<string, string>;
+            const regions = (record.get('regionNames') as string[]).filter(Boolean);
+            return [
+              {
+                id: policyNodeId(String(announcement.id)),
+                label: announcement.name,
+                kind: 'HousingAnnouncement',
+              },
+              ...regions.map((region) => ({
+                id: `region:${region}`,
+                label: region,
+                kind: 'Region',
+              })),
+            ];
+          }),
+          edges: annoRes.records.flatMap((record) => {
+            const announcement = record.get('a').properties as Record<string, string>;
+            return ((record.get('regionNames') as string[]) ?? [])
+              .filter(Boolean)
+              .map((region) => ({
+                id: `${policyNodeId(String(announcement.id))}->region:${region}:AVAILABLE_IN`,
+                source: policyNodeId(String(announcement.id)),
+                target: `region:${region}`,
+                label: 'AVAILABLE_IN',
+              }));
+          }),
         });
       }
       this.logger.log(`청약공고 조회: ${annoRes.records.length}건 (sidoCode=${sidoCode})`);
     } catch (err) {
       this.logger.error('청약공고 Neo4j 조회 오류:', err);
     } finally {
-      await session1.close();
+      await session.close();
     }
 
-    // ── 세션 2: HousingComplex 조회 ──────────────────────────
-    const session2 = this.neo4jDriver.session();
+    // ── Qdrant applyhome / myhome_announcement / cmpet / stat ─
+    // applyhome_cmpet: 청약 경쟁률 ("이 청약 경쟁률 어떻게 돼?")
+    // applyhome_stat: 청약 유형별 통계 ("행복주택 평균 경쟁률")
     try {
-      const complexRes = await session2.run(
+      const queryVector = await this.embeddings.embedQuery(question);
+      const qdrantRes = await this.qdrantClient.search(this.collectionName, {
+        vector: queryVector,
+        limit: 6,
+        filter: {
+          should: [
+            { key: 'source', match: { value: 'applyhome' } },
+            { key: 'source', match: { value: 'myhome_announcement' } },
+            { key: 'source', match: { value: 'applyhome_cmpet' } },
+            { key: 'source', match: { value: 'applyhome_stat' } },
+          ],
+        },
+        with_payload: true,
+        score_threshold: 0.35,
+      });
+      docs.push(
+        ...qdrantRes.map((r) => ({
+          pageContent: (r.payload?.content as string) ?? '',
+          metadata: { ...r.payload, score: r.score },
+        })),
+      );
+      this.traceVectorSearch(traceId, 'Qdrant 청약 공고 검색', question, qdrantRes, {
+        should: [
+          { key: 'source', match: { value: 'applyhome' } },
+          { key: 'source', match: { value: 'myhome_announcement' } },
+          { key: 'source', match: { value: 'applyhome_cmpet' } },
+          { key: 'source', match: { value: 'applyhome_stat' } },
+        ],
+      });
+    } catch (err) {
+      this.logger.error('청약 Qdrant 조회 오류:', err);
+    }
+
+    return docs;
+  }
+
+  /**
+   * 전세·월세 지원금 검색
+   * - Qdrant lh_housing (LH 공공임대단지)
+   * - Qdrant bokjiro (주거급여, 전세자금 등 주거 관련 복지)
+   * - Neo4j HousingComplex (LH 임대단지 구조화 정보)
+   */
+  async searchRentalSupport(question: string, sidoCode: string, traceId?: string): Promise<Document[]> {
+    const docs: Document[] = [];
+
+    // ── Qdrant lh_housing + bokjiro (병렬) ───────────────────
+    try {
+      const queryVector = await this.embeddings.embedQuery(question);
+      const [lhResults, bokjiroResults] = await Promise.all([
+        this.qdrantClient.search(this.collectionName, {
+          vector: queryVector,
+          limit: 5,
+          filter: { must: [{ key: 'source', match: { value: 'lh_housing' } }] },
+          with_payload: true,
+          score_threshold: 0.35,
+        }),
+        this.qdrantClient.search(this.collectionName, {
+          vector: queryVector,
+          limit: 4,
+          filter: { must: [{ key: 'source', match: { value: 'bokjiro' } }] },
+          with_payload: true,
+          score_threshold: 0.4,
+        }),
+      ]);
+      docs.push(
+        ...[...lhResults, ...bokjiroResults].map((r) => ({
+          pageContent: (r.payload?.content as string) ?? '',
+          metadata: { ...r.payload, score: r.score },
+        })),
+      );
+      this.traceVectorSearch(traceId, 'Qdrant 주거 지원 검색', question, [...lhResults, ...bokjiroResults], {
+        sources: ['lh_housing', 'bokjiro'],
+      });
+    } catch (err) {
+      this.logger.error('임대지원 Qdrant 조회 오류:', err);
+    }
+
+    // ── Neo4j HousingComplex ──────────────────────────────────
+    const session = this.neo4jDriver.session();
+    try {
+      const complexRes = await session.run(
         `
         MATCH (h:HousingComplex)-[:LOCATED_IN]->(r:Region)
         WHERE $sidoCode = '' OR r.code = $sidoCode
@@ -357,8 +759,8 @@ export class RagService {
         const rName = record.get('regionName') as string;
         docs.push({
           pageContent: [
-            `[정책명] ${rName} ${h.sigungu || ''} 공공임대주택`,
-            `[유형] 공공임대주택 단지`,
+            `[단지명] ${rName} ${h.sigungu || ''} 공공임대주택`,
+            `[유형] LH 공공임대단지`,
             `[주소] ${h.address || ''}`,
             `[세대수] ${h.hshldCo || ''}세대`,
             `[관리기관] ${h.manager || ''}`,
@@ -367,13 +769,156 @@ export class RagService {
           metadata: { policyId: h.id, source: 'housing_complex', score: 0.85 },
         });
       }
+      if (traceId) {
+        this.ragTrace.recordGraphWalk(traceId, {
+          title: 'Neo4j 공공임대단지 탐색',
+          detail: `${complexRes.records.length}개의 임대단지 노드를 조회했습니다.`,
+          nodes: complexRes.records.flatMap((record) => {
+            const complex = record.get('h').properties as Record<string, unknown>;
+            const regionName = record.get('regionName') as string;
+            return [
+              {
+                id: policyNodeId(String(complex.id)),
+                label: `${regionName} ${String(complex.sigungu ?? '')}`.trim(),
+                kind: 'HousingComplex',
+              },
+              {
+                id: `region:${regionName}`,
+                label: regionName,
+                kind: 'Region',
+              },
+            ];
+          }),
+          edges: complexRes.records.map((record) => {
+            const complex = record.get('h').properties as Record<string, unknown>;
+            const regionName = record.get('regionName') as string;
+            return {
+              id: `${policyNodeId(String(complex.id))}->region:${regionName}:LOCATED_IN`,
+              source: policyNodeId(String(complex.id)),
+              target: `region:${regionName}`,
+              label: 'LOCATED_IN',
+            };
+          }),
+        });
+      }
     } catch (err) {
       this.logger.error('주택단지 Neo4j 조회 오류:', err);
     } finally {
-      await session2.close();
+      await session.close();
     }
 
     return docs;
+  }
+
+  /**
+   * 복지 시설 검색
+   * - Qdrant welfare_facility (시설명, 유형, 주소 등)
+   */
+  async searchWelfareFacilities(
+    question: string,
+    facilityType: string,
+    _sidoCode: string,
+    traceId?: string,
+  ): Promise<Document[]> {
+    const query = facilityType ? `${facilityType} ${question}` : question;
+    const queryVector = await this.embeddings.embedQuery(query);
+    const searchResult = await this.qdrantClient.search(this.collectionName, {
+      vector: queryVector,
+      limit: 8,
+      filter: { must: [{ key: 'source', match: { value: 'welfare_facility' } }] },
+      with_payload: true,
+      score_threshold: 0.35,
+    });
+    this.traceVectorSearch(traceId, 'Qdrant 복지시설 검색', query, searchResult, {
+      must: [{ key: 'source', match: { value: 'welfare_facility' } }],
+    });
+    return searchResult.map((r) => ({
+      pageContent: (r.payload?.content as string) ?? '',
+      metadata: { ...r.payload, score: r.score },
+    }));
+  }
+
+  /**
+   * 신청 마감 임박 청약 목록
+   * - Neo4j HousingAnnouncement 날짜 필터 (오늘 기준 청약 접수 중)
+   */
+  async getUpcomingDeadlines(sidoCode: string, traceId?: string): Promise<Document[]> {
+    // YYYYMMDD 형식 (applyhome 날짜 포맷)
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const session = this.neo4jDriver.session();
+    try {
+      const result = await session.run(
+        `
+        MATCH (a:HousingAnnouncement)
+        WHERE a.subscptBgnde IS NOT NULL AND a.subscptEndde IS NOT NULL
+          AND a.subscptBgnde <= $today AND a.subscptEndde >= $today
+        OPTIONAL MATCH (a)-[:AVAILABLE_IN]->(r:Region)
+        WITH a, collect(DISTINCT r.name) AS regionNames, collect(DISTINCT r.code) AS regionCodes
+        WHERE $sidoCode = '' OR $sidoCode IN regionCodes
+        RETURN a, regionNames
+        ORDER BY a.subscptEndde ASC
+        LIMIT 15
+        `,
+        { today, sidoCode },
+      );
+      const docs = result.records.map((record) => {
+        const a = record.get('a').properties as Record<string, string>;
+        const regionNames = (record.get('regionNames') as string[]).filter(Boolean);
+        return {
+          pageContent: [
+            `[공고명] ${a.name}`,
+            regionNames.length ? `[지역] ${regionNames.join(', ')}` : '',
+            `[청약기간] ${a.subscptBgnde} ~ ${a.subscptEndde}`,
+            `[공급유형] ${a.suplyTyNm || ''}`,
+            `[세대수] ${a.suplyHoCo || ''}세대`,
+            a.winnerDate ? `[당첨발표] ${a.winnerDate}` : '',
+            `[신청링크] ${a.pcUrl || 'https://www.applyhome.co.kr'}`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          metadata: { policyId: a.id, source: 'housing_announcement', score: 0.95 },
+        };
+      });
+      if (traceId) {
+        this.ragTrace.recordGraphWalk(traceId, {
+          title: 'Neo4j 마감 임박 공고 탐색',
+          detail: `${docs.length}개의 접수 중 공고를 찾았습니다.`,
+          nodes: result.records.flatMap((record) => {
+            const announcement = record.get('a').properties as Record<string, string>;
+            const regions = (record.get('regionNames') as string[]).filter(Boolean);
+            return [
+              {
+                id: policyNodeId(String(announcement.id)),
+                label: announcement.name,
+                kind: 'HousingAnnouncement',
+              },
+              ...regions.map((region) => ({
+                id: `region:${region}`,
+                label: region,
+                kind: 'Region',
+              })),
+            ];
+          }),
+          edges: result.records.flatMap((record) => {
+            const announcement = record.get('a').properties as Record<string, string>;
+            return ((record.get('regionNames') as string[]) ?? [])
+              .filter(Boolean)
+              .map((region) => ({
+                id: `${policyNodeId(String(announcement.id))}->region:${region}:AVAILABLE_IN`,
+                source: policyNodeId(String(announcement.id)),
+                target: `region:${region}`,
+                label: 'AVAILABLE_IN',
+              }));
+          }),
+        });
+      }
+      return docs;
+    } catch (err) {
+      this.logger.error('마감 임박 청약 조회 오류:', err);
+      return [];
+    } finally {
+      await session.close();
+    }
   }
 
   /**
@@ -381,7 +926,7 @@ export class RagService {
    * - 정책별 대상 생애주기, 지원 대상, 테마, 제공 지역
    * - 연관 테마를 공유하는 다른 정책 추천
    */
-  async enrichWithGraphData(policyIds: string[]): Promise<string> {
+  async enrichWithGraphData(policyIds: string[], traceId?: string): Promise<string> {
     const validIds = policyIds.filter((id) => !id.startsWith('facility_') && !id.startsWith('housing_'));
     if (validIds.length === 0) return '';
 
@@ -419,12 +964,53 @@ export class RagService {
       ]);
 
       const lines: string[] = [];
+      const traceNodes: RagTraceNode[] = [];
+      const traceEdges: RagTraceEdge[] = [];
       for (const record of detailRes.records) {
+        const id = record.get('id') as string;
         const name = record.get('name') as string;
         const lifeStages = (record.get('lifeStages') as string[]).filter(Boolean);
         const targetGroups = (record.get('targetGroups') as string[]).filter(Boolean);
         const themes = (record.get('themes') as string[]).filter(Boolean);
         const regions = (record.get('regions') as string[]).filter(Boolean);
+
+        traceNodes.push({ id: policyNodeId(id), label: name, kind: 'Policy' });
+        for (const value of lifeStages) {
+          traceNodes.push({ id: `lifeStage:${value}`, label: value, kind: 'LifeStage' });
+          traceEdges.push({
+            id: `${policyNodeId(id)}->lifeStage:${value}:TARGETS_LIFE_STAGE`,
+            source: policyNodeId(id),
+            target: `lifeStage:${value}`,
+            label: 'TARGETS_LIFE_STAGE',
+          });
+        }
+        for (const value of targetGroups) {
+          traceNodes.push({ id: `targetGroup:${value}`, label: value, kind: 'TargetGroup' });
+          traceEdges.push({
+            id: `${policyNodeId(id)}->targetGroup:${value}:TARGETS_GROUP`,
+            source: policyNodeId(id),
+            target: `targetGroup:${value}`,
+            label: 'TARGETS_GROUP',
+          });
+        }
+        for (const value of themes) {
+          traceNodes.push({ id: `theme:${value}`, label: value, kind: 'Theme' });
+          traceEdges.push({
+            id: `${policyNodeId(id)}->theme:${value}:HAS_THEME`,
+            source: policyNodeId(id),
+            target: `theme:${value}`,
+            label: 'HAS_THEME',
+          });
+        }
+        for (const value of regions) {
+          traceNodes.push({ id: `region:${value}`, label: value, kind: 'Region' });
+          traceEdges.push({
+            id: `${policyNodeId(id)}->region:${value}:AVAILABLE_IN`,
+            source: policyNodeId(id),
+            target: `region:${value}`,
+            label: 'AVAILABLE_IN',
+          });
+        }
 
         if (lifeStages.length || targetGroups.length || themes.length || regions.length) {
           lines.push(`[${name}]`);
@@ -441,6 +1027,16 @@ export class RagService {
         lines.push(`[연관 정책]: ${relatedNames.join(', ')}`);
       }
 
+      if (traceId) {
+        this.ragTrace.recordGraphWalk(traceId, {
+          title: 'Neo4j 정책 관계 확장',
+          detail: `${detailRes.records.length}개 정책 노드에서 생애주기·대상·주제·지역 관계를 펼쳤습니다.`,
+          nodes: traceNodes,
+          edges: traceEdges,
+          payload: { relatedPolicies: relatedNames },
+        });
+      }
+
       return lines.join('\n');
     } catch {
       return '';
@@ -454,7 +1050,88 @@ export class RagService {
     role: string,
     content: string,
   ): Promise<void> {
-    await this.messageRepo.save(this.messageRepo.create({ sessionId, role, content }));
+    if (role === 'assistant' && !this.chatRuntime.isSessionOpen(sessionId)) {
+      return;
+    }
+
+    await this.persistMessage(sessionId, role, content);
+  }
+
+  private async saveUserMessage(sessionId: string, content: string): Promise<void> {
+    await this.persistMessage(sessionId, 'user', content, content.slice(0, 60).trim());
+  }
+
+  private async persistMessage(
+    sessionId: string,
+    role: 'user' | 'assistant' | string,
+    content: string,
+    nextTitle?: string,
+  ): Promise<void> {
+    await this.messageRepo.save(
+      this.messageRepo.create({
+        sessionId,
+        session: { id: sessionId } as ChatSession,
+        role,
+        content,
+      }),
+    );
+
+    await this.sessionRepo.query(
+      `
+      UPDATE chat_sessions
+      SET "updatedAt" = NOW(),
+          title = CASE
+            WHEN $1::text IS NOT NULL AND (title IS NULL OR title = '' OR title = '새 대화')
+              THEN $1
+            ELSE title
+          END
+      WHERE id = $2
+      `,
+      [nextTitle ?? null, sessionId],
+    );
+  }
+
+  private async ensureSessionOwnership(userId: string, sessionId: string): Promise<void> {
+    const session = await this.sessionRepo.findOne({
+      where: { id: sessionId, userId },
+      select: ['id'],
+    });
+    if (!session) {
+      throw new Error('대화를 찾을 수 없습니다.');
+    }
+  }
+
+  private traceVectorSearch(
+    traceId: string | undefined,
+    title: string,
+    query: string,
+    results: Array<{ id?: string | number; score?: number | null; payload?: Record<string, unknown> | null }>,
+    filter?: unknown,
+  ) {
+    if (!traceId) return;
+
+    this.ragTrace.recordVectorSearch(traceId, {
+      title,
+      query,
+      filter,
+      hits: results.map((result, index) => {
+        const payload = result.payload ?? {};
+        const source = typeof payload.source === 'string' ? payload.source : null;
+        const policyId = extractPolicyIdFromPayload(payload, index);
+        return {
+          id: policyNodeId(policyId),
+          label: extractTraceLabel(payload, index),
+          kind: mapTraceKind(source),
+          score: result.score ?? null,
+          source,
+          meta: {
+            policyId,
+            source,
+            qdrantId: result.id ?? null,
+          },
+        };
+      }),
+    });
   }
 }
 
@@ -515,6 +1192,61 @@ function extractPolicyName(text: string): string | null {
     if (m?.[1]) return m[1].trim().split('\n')[0].trim();
   }
   return null;
+}
+
+function policyNodeId(value: string) {
+  return `entity:${value}`;
+}
+
+function extractPolicyIdFromPayload(payload: Record<string, unknown>, index: number) {
+  const raw =
+    payload.policyId ??
+    payload.id ??
+    payload.announcementId ??
+    payload.facilityId ??
+    payload.complexId;
+
+  return typeof raw === 'string' && raw.length > 0 ? raw : `vector-hit-${index}`;
+}
+
+function extractTraceLabel(payload: Record<string, unknown>, index: number) {
+  const nameCandidate = [payload.name, payload.title, payload.policyName, payload.facilityName]
+    .find((value) => typeof value === 'string' && value.trim().length > 0);
+
+  if (typeof nameCandidate === 'string') {
+    return nameCandidate.trim();
+  }
+
+  const contentCandidate =
+    (typeof payload.content === 'string' && payload.content) ||
+    (typeof payload.text === 'string' && payload.text) ||
+    '';
+  const extracted = extractPolicyName(contentCandidate);
+  if (extracted) return extracted;
+
+  return `문서 ${index + 1}`;
+}
+
+function mapTraceKind(source: string | null) {
+  switch (source) {
+    case 'bokjiro':
+    case 'local_bokjiro':
+    case 'youth_center':
+      return 'Policy';
+    case 'welfare_facility':
+      return 'WelfareFacility';
+    case 'lh_housing':
+    case 'housing_complex':
+      return 'HousingComplex';
+    case 'housing_announcement':
+    case 'applyhome':
+    case 'myhome_announcement':
+    case 'applyhome_cmpet':
+    case 'applyhome_stat':
+      return 'HousingAnnouncement';
+    default:
+      return 'Document';
+  }
 }
 
 const QUESTION_TEMPLATES = [

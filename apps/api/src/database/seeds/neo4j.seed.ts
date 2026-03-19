@@ -1,13 +1,14 @@
 import neo4j from 'neo4j-driver';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getRequiredEnv } from '../../common/env.util';
 
 async function seedNeo4j() {
   const driver = neo4j.driver(
     process.env.NEO4J_URI ?? 'bolt://localhost:7687',
     neo4j.auth.basic(
       process.env.NEO4J_USERNAME ?? 'neo4j',
-      process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass',
+      getRequiredEnv('NEO4J_PASSWORD'),
     ),
   );
 
@@ -35,4 +36,7 @@ async function seedNeo4j() {
   }
 }
 
-seedNeo4j().catch(console.error);
+seedNeo4j().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

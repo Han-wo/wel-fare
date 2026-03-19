@@ -8,10 +8,18 @@ import * as xml2js from 'xml2js';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { getRequiredAnyEnv, getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
-const WELFARE_API_KEY =
-  process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredAnyEnv([
+  'BOKJIRO_API_KEY',
+  'PUBLIC_DATA_API_KEY',
+]);
 const LOCAL_BASE_URL =
   'https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations';
 const PAGE_SIZE = 100;
@@ -23,10 +31,10 @@ const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
     process.env.NEO4J_USERNAME ?? 'neo4j',
-    process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass',
+    getRequiredEnv('NEO4J_PASSWORD'),
   ),
 );
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 // ── 타입 ─────────────────────────────────────────────────
 interface LocalPolicyListItem {
@@ -52,6 +60,8 @@ interface LocalPolicyDetail extends LocalPolicyListItem {
   enfcBgngYmd?: string; // 시행일
   enfcEndYmd?: string;  // 종료일
 }
+
+type PreparedLocalPolicy = PreparedSyncItem<LocalPolicyDetail>;
 
 // ── 유틸 ─────────────────────────────────────────────────
 function cleanText(text?: string): string {
@@ -95,7 +105,7 @@ async function parseXml(xml: string): Promise<Record<string, unknown>> {
 
 async function fetchList(pageNo: number): Promise<{ total: number; items: LocalPolicyListItem[] }> {
   const { data } = await axios.get(`${LOCAL_BASE_URL}/LcgvWelfarelist`, {
-    params: { serviceKey: WELFARE_API_KEY, numOfRows: PAGE_SIZE, pageNo },
+    params: { serviceKey: API_KEY, numOfRows: PAGE_SIZE, pageNo },
     responseType: 'text',
   });
 
@@ -127,7 +137,7 @@ async function fetchList(pageNo: number): Promise<{ total: number; items: LocalP
 async function fetchDetail(servId: string): Promise<Partial<LocalPolicyDetail>> {
   try {
     const { data } = await axios.get(`${LOCAL_BASE_URL}/LcgvWelfaredetailed`, {
-      params: { serviceKey: WELFARE_API_KEY, servId },
+      params: { serviceKey: API_KEY, servId },
       timeout: 10000,
     });
     const parsed = await parseXml(data);
@@ -154,13 +164,37 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
+function preparePolicies(policies: LocalPolicyDetail[]): PreparedLocalPolicy[] {
+  return policies.map((policy) => {
+    const policyId = policy.servId;
+    const content = buildPageContent(policy);
+    return {
+      item: policy,
+      policyId,
+      graphId: policyId,
+      content,
+      syncHash: makeSyncHash({
+        policyId,
+        content,
+        region: policy.ctpvNm,
+        sigungu: policy.sggNm,
+        ministry: policy.bizChrDeptNm,
+        sourceUpdatedAt: policy.lastModYmd ?? '',
+      }),
+    };
+  });
+}
+
 // ── Qdrant upsert ────────────────────────────────────────
-async function upsertToQdrant(policies: LocalPolicyDetail[], embeddings: number[][]): Promise<void> {
-  const points = policies.map((p, i) => ({
+async function upsertToQdrant(
+  policies: PreparedLocalPolicy[],
+  embeddings: number[][],
+): Promise<void> {
+  const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
     id: servIdToNum(p.servId),
     vector: embeddings[i],
     payload: {
-      policyId: p.servId,
+      policyId,
       policyName: p.servNm,
       category: p.intrsThemaNmArray ?? '',
       region: p.ctpvNm,
@@ -170,20 +204,21 @@ async function upsertToQdrant(policies: LocalPolicyDetail[], embeddings: number[
       onlineApply: (p.aplyMtdNm ?? '').includes('인터넷') || (p.aplyMtdNm ?? '').includes('모바일'),
       supportCycle: p.sprtCycNm ?? '',
       provisionType: p.srvPvsnNm ?? '',
-      content: buildPageContent(p),
+      content,
       applyUrl: `https://www.bokjiro.go.kr/ssis-tbu/twataa/wlfareInfo/moveTWAT52011M.do?wlfareInfoId=${p.servId}`,
       status: 'active',
       source: 'local_bokjiro',
+      syncHash,
     },
   }));
   await qdrant.upsert(COLLECTION, { wait: true, points });
 }
 
 // ── Neo4j upsert ─────────────────────────────────────────
-async function upsertToNeo4j(policies: LocalPolicyDetail[]): Promise<void> {
+async function upsertToNeo4j(policies: PreparedLocalPolicy[]): Promise<void> {
   const session = neo4jDriver.session();
   try {
-    for (const p of policies) {
+    for (const { item: p, syncHash } of policies) {
       await session.run(
         `
         MERGE (pol:Policy {id: $id})
@@ -194,7 +229,7 @@ async function upsertToNeo4j(policies: LocalPolicyDetail[]): Promise<void> {
             pol.summary = $summary,
             pol.supportCycle = $supportCycle,
             pol.provisionType = $provisionType,
-            pol.source = 'local_bokjiro',
+            pol.source = 'local_bokjiro', pol.syncHash = $syncHash,
             pol.updatedAt = datetime()
         `,
         {
@@ -206,6 +241,7 @@ async function upsertToNeo4j(policies: LocalPolicyDetail[]): Promise<void> {
           summary: cleanText(p.servDgst),
           supportCycle: p.sprtCycNm ?? '',
           provisionType: p.srvPvsnNm ?? '',
+          syncHash,
         },
       );
 
@@ -264,6 +300,9 @@ async function main() {
   console.log(`\n✅ 목록 수집 완료: ${allItems.length}개`);
 
   console.log('🔍 상세 조회 + 임베딩 + 저장 중...');
+  let vectorUpdated = 0;
+  let graphUpdated = 0;
+  let skipped = 0;
   for (let i = 0; i < allItems.length; i += EMBED_BATCH) {
     const batch = allItems.slice(i, i + EMBED_BATCH);
 
@@ -274,21 +313,47 @@ async function main() {
       }),
     );
 
-    const texts = details.map(buildPageContent);
-    const embeddings = await embedTexts(texts);
+    const prepared = preparePolicies(details);
+    const plan = await buildIncrementalSyncPlan({
+      client: qdrant,
+      collectionName: COLLECTION,
+      preparedItems: prepared,
+      driver: neo4jDriver,
+      graphLabel: 'Policy',
+    });
+    skipped += plan.skippedCount;
 
-    await upsertToQdrant(details, embeddings);
-    await upsertToNeo4j(details);
+    if (plan.vectorUpdates.length > 0) {
+      const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
+      const graphUpdateIds = new Set(plan.graphUpdates.map((item) => item.policyId));
+      const graphBatch = plan.vectorUpdates.filter((item) => graphUpdateIds.has(item.policyId));
+      await Promise.all([
+        upsertToQdrant(plan.vectorUpdates, embeddings),
+        graphBatch.length > 0 ? upsertToNeo4j(graphBatch) : Promise.resolve(),
+      ]);
+      vectorUpdated += plan.vectorUpdates.length;
+      graphUpdated += graphBatch.length;
+    }
+
+    if (plan.graphOnlyUpdates.length > 0) {
+      await upsertToNeo4j(plan.graphOnlyUpdates);
+      graphUpdated += plan.graphOnlyUpdates.length;
+    }
 
     const done = Math.min(i + EMBED_BATCH, allItems.length);
     process.stdout.write(`   [${done}/${allItems.length}] 처리 완료\r`);
   }
 
-  console.log(`\n🎉 지자체 복지 정책 ${allItems.length}개 적재 완료!`);
+  console.log(
+    `\n🎉 지자체 복지 정책 증분 적재 완료! (벡터 ${vectorUpdated}, 그래프 ${graphUpdated}, 스킵 ${skipped})`,
+  );
 }
 
 main()
-  .catch(console.error)
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
   .finally(async () => {
     await neo4jDriver.close();
   });

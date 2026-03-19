@@ -72,7 +72,24 @@ export class AuthService {
       accessToken: this.jwtService.sign(payload, {
         expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m'),
       }),
+      refreshToken: this.jwtService.sign(payload, {
+        secret: this.configService.get('JWT_REFRESH_SECRET'),
+        expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN', '30d'),
+      }),
       user: { id: user.id, name: user.name, role: user.role },
     };
+  }
+
+  async refresh(refreshToken: string) {
+    try {
+      const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
+        secret: this.configService.get('JWT_REFRESH_SECRET'),
+      });
+      const user = await this.userRepo.findOne({ where: { id: payload.sub } });
+      if (!user) throw new UnauthorizedException();
+      return this.generateTokens(user);
+    } catch {
+      throw new UnauthorizedException('리프레시 토큰이 유효하지 않습니다');
+    }
   }
 }

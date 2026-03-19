@@ -21,6 +21,7 @@ echo ""
 declare -a SEED_NAMES=(
   "중앙부처 복지서비스"
   "지자체 복지서비스"
+  "청년정책"
   "공공임대주택 단지"
   "사회복지시설"
   "공공주택 모집공고"
@@ -31,6 +32,7 @@ declare -a SEED_NAMES=(
 declare -a SEED_SCRIPTS=(
   "welfare-api.seed.ts"
   "local-welfare.seed.ts"
+  "youth-policy.seed.ts"
   "rental-housing.seed.ts"
   "welfare-facility.seed.ts"
   "housing-announcement.seed.ts"

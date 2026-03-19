@@ -35,4 +35,7 @@ async function seedQdrant() {
   }
 }
 
-seedQdrant().catch(console.error);
+seedQdrant().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

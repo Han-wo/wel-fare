@@ -7,16 +7,22 @@ import axios from 'axios';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
-const HOUSING_API_KEY =
-  process.env.HOUSING_API_KEY ??
-  process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const HOUSING_BASE_URL = 'https://apis.data.go.kr/1613000/HWSPR04';
 const PAGE_SIZE = 100;
 const EMBED_BATCH = 20;
 const CONCURRENCY = 10;       // 동시 API 요청 수
-const EMBED_CONCURRENCY = 5;  // 동시에 처리할 임베딩 배치 수
+const EMBED_CONCURRENCY = 2;  // 동시에 처리할 임베딩 배치 수
+const QDRANT_RETRY_LIMIT = 3;
+const QDRANT_RETRY_DELAY_MS = 1500;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
@@ -24,10 +30,10 @@ const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
     process.env.NEO4J_USERNAME ?? 'neo4j',
-    process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass',
+    getRequiredEnv('NEO4J_PASSWORD'),
   ),
 );
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 // ── 전국 시도/시군구 코드표 ───────────────────────────────
 const REGION_CODES: { brtcCode: string; brtcNm: string; signguCode: string; signguNm: string }[] = [
@@ -329,6 +335,8 @@ interface HousingComplex {
   units: { suplyTyNm: string; styleNm: string; area: number; houseTyNm: string; rentGtn: number; mtRnt: number }[];
 }
 
+type PreparedHousingComplex = PreparedSyncItem<HousingComplex>;
+
 // ── 유틸 ─────────────────────────────────────────────────
 function formatWon(amount: number): string {
   if (amount >= 10000) return `${(amount / 10000).toFixed(0)}만원`;
@@ -372,6 +380,21 @@ function itemId(c: HousingComplex): number {
   return (hash + 2_000_000_000) % 2_147_483_647;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableQdrantError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('UND_ERR_SOCKET')
+    || message.includes('fetch failed')
+    || message.includes('socket')
+    || message.includes('ECONNRESET')
+    || message.includes('ETIMEDOUT')
+  );
+}
+
 // ── API 호출 ─────────────────────────────────────────────
 async function fetchHousing(
   brtcCode: string,
@@ -380,7 +403,7 @@ async function fetchHousing(
 ): Promise<{ total: number; items: HousingItem[] }> {
   try {
     const { data } = await axios.get(`${HOUSING_BASE_URL}/rentalHouseGwList`, {
-      params: { serviceKey: HOUSING_API_KEY, brtcCode, signguCode, numOfRows: PAGE_SIZE, pageNo },
+      params: { serviceKey: API_KEY, brtcCode, signguCode, numOfRows: PAGE_SIZE, pageNo },
       timeout: 10000,
     });
     const body = data?.response?.body;
@@ -433,34 +456,74 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
+function prepareComplexes(items: HousingComplex[]): PreparedHousingComplex[] {
+  return items.map((item) => {
+    const policyId = `housing_${item.hsmpSn}`;
+    const content = buildPageContent(item);
+    return {
+      item,
+      policyId,
+      graphId: policyId,
+      content,
+      syncHash: makeSyncHash({
+        policyId,
+        content,
+        region: item.brtcNm,
+        sigungu: item.signguNm,
+        householdCount: item.hshldCo,
+        units: item.units,
+      }),
+    };
+  });
+}
+
 // ── Qdrant upsert ────────────────────────────────────────
-async function upsertToQdrant(complexes: HousingComplex[], embeddings: number[][]): Promise<void> {
-  const points = complexes.map((c, i) => ({
+async function upsertToQdrant(
+  complexes: PreparedHousingComplex[],
+  embeddings: number[][],
+): Promise<void> {
+  const points = complexes.map(({ item: c, policyId, content, syncHash }, i) => ({
     id: itemId(c),
     vector: embeddings[i],
     payload: {
-      policyId: `housing_${c.hsmpSn}`,
+      policyId,
       policyName: `공공임대주택 - ${c.signguNm}`,
       category: '주거',
       region: c.brtcNm,
       sigungu: c.signguNm,
       ministry: c.insttNm,
-      content: buildPageContent(c),
+      content,
       status: 'active',
       source: 'lh_housing',
       hsmpNm: c.hsmpNm,
       rnAdres: c.rnAdres,
+      syncHash,
     },
   }));
-  await qdrant.upsert(COLLECTION, { wait: true, points });
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= QDRANT_RETRY_LIMIT; attempt += 1) {
+    try {
+      await qdrant.upsert(COLLECTION, { wait: true, points });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableQdrantError(error) || attempt === QDRANT_RETRY_LIMIT) {
+        throw error;
+      }
+      console.warn(`  Qdrant 재시도 ${attempt}/${QDRANT_RETRY_LIMIT}: ${(error as Error).message}`);
+      await sleep(QDRANT_RETRY_DELAY_MS * attempt);
+    }
+  }
+
+  throw lastError;
 }
 
 // ── Neo4j upsert (레코드별 오류 격리) ────────────────────
-async function upsertToNeo4j(complexes: HousingComplex[]): Promise<void> {
+async function upsertToNeo4j(complexes: PreparedHousingComplex[]): Promise<void> {
   const session = neo4jDriver.session();
   try {
-    for (const c of complexes) {
-      const id = `housing_${c.hsmpSn}`;
+    for (const { item: c, policyId: id, syncHash } of complexes) {
       const name = c.hsmpNm ?? '';
       const address = c.rnAdres ?? '';
       const region = c.brtcNm ?? '';
@@ -473,9 +536,19 @@ async function upsertToNeo4j(complexes: HousingComplex[]): Promise<void> {
           MERGE (h:HousingComplex {id: $id})
           SET h.name = $name, h.address = $address, h.region = $region,
               h.sigungu = $sigungu, h.manager = $manager, h.hshldCo = $hshldCo,
-              h.source = 'lh_housing', h.updatedAt = datetime()
+              h.source = 'lh_housing', h.syncHash = $syncHash,
+              h.updatedAt = datetime()
           `,
-          { id, name, address, region, sigungu, manager, hshldCo: c.hshldCo ?? 0 },
+          {
+            id,
+            name,
+            address,
+            region,
+            sigungu,
+            manager,
+            hshldCo: c.hshldCo ?? 0,
+            syncHash,
+          },
         );
         await session.run(
           `MERGE (r:Region {name: $region}) WITH r MATCH (h:HousingComplex {id: $id}) MERGE (h)-[:LOCATED_IN]->(r)`,
@@ -528,30 +601,70 @@ async function main() {
   }
   console.log(`\n✅ 수집 완료: ${allComplexes.length}개 단지`);
 
+  const prepared = prepareComplexes(allComplexes);
+  const plan = await buildIncrementalSyncPlan({
+    client: qdrant,
+    collectionName: COLLECTION,
+    preparedItems: prepared,
+    driver: neo4jDriver,
+    graphLabel: 'HousingComplex',
+  });
+  console.log(
+    `   증분 대상 - 벡터 ${plan.vectorUpdates.length}개, 그래프 ${plan.graphUpdates.length}개, 스킵 ${plan.skippedCount}개`,
+  );
+
+  if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
+    console.log('✅ 변경 없음');
+    return;
+  }
+
   console.log('🔍 임베딩 + 저장 중...');
-  let done = 0;
+  const graphUpdateIds = new Set(plan.graphUpdates.map((item) => item.policyId));
+  let vectorDone = 0;
 
-  async function processBatch(batch: HousingComplex[]): Promise<void> {
-    const texts = batch.map(buildPageContent);
-    const embeddings = await embedTexts(texts);
-    await Promise.all([
-      upsertToQdrant(batch, embeddings),
-      upsertToNeo4j(batch),
-    ]);
-    done += batch.length;
-    process.stdout.write(`   [${done}/${allComplexes.length}] 처리 완료\r`);
-  }
-
-  for (let i = 0; i < allComplexes.length; i += EMBED_BATCH * EMBED_CONCURRENCY) {
-    const concurrentBatches: HousingComplex[][] = [];
-    for (let j = i; j < Math.min(i + EMBED_BATCH * EMBED_CONCURRENCY, allComplexes.length); j += EMBED_BATCH) {
-      concurrentBatches.push(allComplexes.slice(j, j + EMBED_BATCH));
+  async function processVectorBatch(batch: PreparedHousingComplex[]): Promise<void> {
+    const embeddings = await embedTexts(batch.map((item) => item.content));
+    const graphBatch = batch.filter((item) => graphUpdateIds.has(item.policyId));
+    await upsertToQdrant(batch, embeddings);
+    if (graphBatch.length > 0) {
+      await upsertToNeo4j(graphBatch);
     }
-    await Promise.all(concurrentBatches.map(processBatch));
+    vectorDone += batch.length;
+    process.stdout.write(`   벡터 [${vectorDone}/${plan.vectorUpdates.length}] 처리 완료\r`);
   }
-  console.log(`\n🎉 공공임대주택 ${allComplexes.length}개 단지 적재 완료!`);
+
+  for (let i = 0; i < plan.vectorUpdates.length; i += EMBED_BATCH * EMBED_CONCURRENCY) {
+    const concurrentBatches: PreparedHousingComplex[][] = [];
+    for (
+      let j = i;
+      j < Math.min(i + EMBED_BATCH * EMBED_CONCURRENCY, plan.vectorUpdates.length);
+      j += EMBED_BATCH
+    ) {
+      concurrentBatches.push(plan.vectorUpdates.slice(j, j + EMBED_BATCH));
+    }
+    const results = await Promise.allSettled(concurrentBatches.map(processVectorBatch));
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failed) {
+      throw failed.reason;
+    }
+  }
+
+  if (plan.graphOnlyUpdates.length > 0) {
+    let graphDone = 0;
+    for (let i = 0; i < plan.graphOnlyUpdates.length; i += EMBED_BATCH) {
+      const batch = plan.graphOnlyUpdates.slice(i, i + EMBED_BATCH);
+      await upsertToNeo4j(batch);
+      graphDone += batch.length;
+      process.stdout.write(`   그래프 [${graphDone}/${plan.graphOnlyUpdates.length}] 처리 완료\r`);
+    }
+  }
+
+  console.log(`\n🎉 공공임대주택 증분 동기화 완료!`);
 }
 
 main()
-  .catch(console.error)
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
   .finally(async () => { await neo4jDriver.close(); });

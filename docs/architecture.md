@@ -265,7 +265,7 @@ users ──── user_profiles
   ├── generate_answer
   │     └── welfare-rag-generation
   │           ├── ChatPromptTemplate
-  │           ├── ChatOpenAI (gpt-4o)
+  │           ├── ChatOpenAI (gpt-5-mini)
   │           └── StringOutputParser
   └── save_message
 ```
@@ -334,12 +334,14 @@ src/
 ### 개발 (infra/docker-compose.dev.yml)
 인프라만 컨테이너로 실행, 앱은 로컬 dev 서버
 
-| 서비스 | 포트 | 비밀번호 |
+`infra/.env`에서 개발용 비밀번호를 관리
+
+| 서비스 | 포트 | 인증 정보 |
 |--------|------|---------|
-| PostgreSQL 16 | 5432 | welfare / welfare_pass |
-| Neo4j 5 | 7474(HTTP), 7687(Bolt) | neo4j / welfare_neo4j_pass |
+| PostgreSQL 16 | 5432 | `infra/.env`의 `POSTGRES_*` |
+| Neo4j 5 | 7474(HTTP), 7687(Bolt) | `infra/.env`의 `NEO4J_AUTH` |
 | Qdrant | 6333(REST), 6334(gRPC) | - |
-| Redis 7 | 6379 | welfare_redis_pass |
+| Redis 7 | 6379 | `infra/.env`의 `REDIS_PASSWORD` |
 
 ### 운영 (infra/docker-compose.prod.yml)
 앱 컨테이너 포함 전체 스택 실행
@@ -355,15 +357,20 @@ pnpm dev                   # 앱 개발 서버 (web:3000, api:3001)
 
 ## 13. 환경 변수
 
-`apps/api/.env` 주요 변수:
+`apps/web/.env.local` / `apps/api/.env` 주요 변수:
 
 ```bash
-DATABASE_URL=postgresql://welfare:welfare_pass@localhost:5432/welfare_ai
+NEXT_PUBLIC_API_URL=http://localhost:3001
+DATABASE_URL=postgresql://welfare:<POSTGRES_PASSWORD>@localhost:5432/welfare_ai
 NEO4J_URI=bolt://localhost:7687
 QDRANT_URL=http://localhost:6333
-REDIS_HOST=localhost / REDIS_PASSWORD=welfare_redis_pass
+REDIS_HOST=localhost / REDIS_PASSWORD=<REDIS_PASSWORD>
 JWT_SECRET=...  JWT_REFRESH_SECRET=...
 OPENAI_API_KEY=sk-...
+OPENAI_CHAT_MODEL=gpt-5-mini
+PUBLIC_DATA_API_KEY=...
+BOKJIRO_API_KEY=...
+YOUTH_CENTER_API_KEY=...
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=ls__...
 LANGCHAIN_PROJECT=welfare-ai-rag

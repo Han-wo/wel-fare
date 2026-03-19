@@ -13,7 +13,7 @@ export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ name: 'session_id', type: 'uuid' })
   sessionId: string;
 
   @ManyToOne(() => ChatSession, (session) => session.messages, { onDelete: 'CASCADE' })

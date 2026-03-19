@@ -1,11 +1,33 @@
-import { Controller, Get, Query, UseGuards, Request, Sse, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Request, Sse } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RagService } from './rag.service';
+import { RagService, RagStreamEvent } from './rag.service';
 
 interface MessageEvent {
   data: string;
+}
+
+type StreamPayload =
+  | { eventType: 'SESSION_CREATED'; sessionId: string }
+  | { eventType: 'THINK' }
+  | { eventType: 'TOKEN'; content: string }
+  | { eventType: 'DONE' };
+
+function toStreamPayload(event: RagStreamEvent): StreamPayload {
+  if (event.type === 'session_created') {
+    return { eventType: 'SESSION_CREATED', sessionId: event.data };
+  }
+
+  if (event.type === 'think') {
+    return { eventType: 'THINK' };
+  }
+
+  if (event.type === 'text') {
+    return { eventType: 'TOKEN', content: event.data };
+  }
+
+  return { eventType: 'DONE' };
 }
 
 @ApiTags('RAG')
@@ -31,10 +53,9 @@ export class RagController {
     const generator = this.ragService.streamAnswer(req.user.id, sessionId, question);
     return new Observable((subscriber) => {
       (async () => {
-        for await (const token of generator) {
-          subscriber.next({ data: token });
+        for await (const event of generator) {
+          subscriber.next({ data: JSON.stringify(toStreamPayload(event)) });
         }
-        subscriber.next({ data: '[DONE]' });
         subscriber.complete();
       })().catch((err) => subscriber.error(err));
     });
