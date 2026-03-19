@@ -27,7 +27,7 @@ import { DataSyncModule } from './modules/data-sync/data-sync.module';
         type: 'postgres',
         url: config.get('DATABASE_URL'),
         autoLoadEntities: true,
-        synchronize: config.get('NODE_ENV') === 'development',
+        synchronize: false,
         logging: config.get('NODE_ENV') === 'development',
       }),
     }),

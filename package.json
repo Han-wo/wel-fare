@@ -2,7 +2,8 @@
   "name": "welfare-ai",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "pnpm infra:up && turbo dev",
+    "dev:apps": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
     "type-check": "turbo type-check",

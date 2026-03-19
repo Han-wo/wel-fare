@@ -4,9 +4,18 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import neo4j from 'neo4j-driver';
 import { RagController } from './rag.controller';
 import { RagTraceAdminController } from './rag-trace.admin.controller';
-import { RagService, NEO4J_DRIVER } from './rag.service';
+import { RagService } from './rag.service';
+import { RagOrchestratorService } from './rag-orchestrator.service';
 import { RagTraceService } from './rag-trace.service';
-import { RagRouterService } from './rag-router.service';
+import { TraceFacade } from './trace-facade.service';
+import { RetrieverServices } from './retriever-services.service';
+import { QueryAnalysisService } from './query-analysis.service';
+import { StreamingService } from './streaming.service';
+import { VectorRetrievalService } from './vector-retrieval.service';
+import { PolicyGraphService } from './policy-graph.service';
+import { HousingGraphService } from './housing-graph.service';
+import { SuggestionService } from './suggestion.service';
+import { NEO4J_DRIVER } from './rag.tokens';
 import { UserProfile } from '../profile/entities/user-profile.entity';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
@@ -34,8 +43,16 @@ import { RagTrace } from './entities/rag-trace.entity';
         ),
     },
     RagService,
+    RagOrchestratorService,
     RagTraceService,
-    RagRouterService,
+    TraceFacade,
+    RetrieverServices,
+    QueryAnalysisService,
+    StreamingService,
+    VectorRetrievalService,
+    PolicyGraphService,
+    HousingGraphService,
+    SuggestionService,
   ],
 })
 export class RagModule {}

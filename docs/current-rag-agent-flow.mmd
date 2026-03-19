@@ -1,0 +1,39 @@
+flowchart TD
+  Start["Question + sessionId"] --> Own["Ensure session ownership"]
+  Own --> Trace["Start trace"]
+  Trace --> Route["QueryAnalysisService.resolveRoute()"]
+
+  Route -->|SEARCH| SearchLoad["SearchGraph.load_context"]
+  Route -->|ELIGIBILITY| EligibilityLoad["EligibilityGraph.load_context"]
+  Route -->|APPLICATION_ASSIST| AppLoad["ApplicationAssistGraph.load_context"]
+
+  SearchLoad --> SearchHitl["Check HITL requirement"]
+  SearchHitl -->|Need more info| SearchAsk["Return clarification question"]
+  SearchHitl -->|Enough info| SearchPre["resolveSearchPreRoute()"]
+  SearchPre -->|Matched| SearchTool["Execute fixed tool"]
+  SearchPre -->|No match| SearchAgent["LLM Tool Calling Loop"]
+  SearchTool --> SearchAnswer["Generate answer"]
+  SearchAgent --> SearchAnswer
+  SearchAsk --> Save["Save assistant message"]
+  SearchAnswer --> Save
+
+  EligibilityLoad --> EligibilityHitl["Check HITL requirement"]
+  EligibilityHitl -->|Need more info| EligibilityAsk["Return clarification question"]
+  EligibilityHitl -->|Enough info| EligibilityCollect["searchPolicyEligibility()"]
+  EligibilityCollect --> EligibilityJudge["LLM eligibility judgment"]
+  EligibilityAsk --> Save
+  EligibilityJudge --> Save
+
+  AppLoad --> AppHitl["Check HITL requirement"]
+  AppHitl -->|Need more info| AppAsk["Return clarification question"]
+  AppHitl -->|Enough info| AppSources["selectApplicationSources()"]
+  AppSources --> AppRetrieve["Run retrieval set\nwelfare / youth / housing / deadlines / facilities"]
+  AppRetrieve --> AppCompose["LLM application guide generation"]
+  AppAsk --> Save
+  AppCompose --> Save
+
+  Save --> Stream["StreamingService emits\nSESSION_CREATED / THINK / TOKEN / DONE"]
+  Stream --> Runtime["ChatRuntimeService\nDB + Redis state"]
+  Stream --> TracePersist["RagTraceService live persistence"]
+  Runtime --> End["Client renders answer / thinking state"]
+  TracePersist --> End

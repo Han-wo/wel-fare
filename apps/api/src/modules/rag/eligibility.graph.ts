@@ -10,8 +10,8 @@ import {
 import type { RunnableConfig } from '@langchain/core/runnables';
 import type { UserProfile } from '@welfare-ai/shared-types';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
-import { type RagServices } from './rag.graph';
-import { getClarificationRequest } from './hitl.util';
+import { retrievalResultToPromptBlock } from './retrieval.types';
+import { type RagGraphServices } from './rag.graph';
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -86,7 +86,7 @@ async function streamAnswer(
   };
 }
 
-export function createEligibilityGraph(services: RagServices) {
+export function createEligibilityGraph(services: RagGraphServices) {
   const llm = new ChatOpenAI({
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
@@ -124,7 +124,7 @@ export function createEligibilityGraph(services: RagServices) {
   async function requestMissingInfo(
     state: EligibilityGraphState,
   ): Promise<Partial<EligibilityGraphState>> {
-    const clarification = getClarificationRequest({
+    const clarification = services.queryAnalysis.getClarificationRequest({
       routeType: 'ELIGIBILITY',
       question: state.question,
       profile: state.profile,
@@ -156,17 +156,21 @@ export function createEligibilityGraph(services: RagServices) {
   async function collectEligibilityContext(
     state: EligibilityGraphState,
   ): Promise<Partial<EligibilityGraphState>> {
-    const docs = await services.searchByPolicyName(state.question, state.traceId);
-    const profileSummary = formatProfile(state.profile);
-    const docsText = docs.length > 0
-      ? docs.map((doc, index) => `### 후보 정책 ${index + 1}\n${doc.pageContent}`).join('\n\n---\n\n')
-      : '관련 정책을 찾지 못했습니다.';
+    const result = await services.searchPolicyEligibility(
+      state.question,
+      state.userId,
+      state.traceId,
+    );
+    const profileSummary = result.profileSummary ?? formatProfile(state.profile);
+    const docsText = retrievalResultToPromptBlock(result, {
+      heading: '정책 후보 문서',
+      emptyLabel: '관련 정책을 찾지 못했습니다.',
+    });
 
     const contextText = [
       '## 사용자 프로필',
       profileSummary,
       '',
-      '## 정책 후보 문서',
       docsText,
       '',
       '위 자료만 근거로 사용자의 적격 가능성을 판단하세요.',
@@ -175,8 +179,8 @@ export function createEligibilityGraph(services: RagServices) {
     services.recordEvent(state.traceId, {
       type: 'decision',
       title: '자격확인 workflow 실행',
-      detail: `정책 후보 ${docs.length}건을 기준으로 적격 가능성을 판단합니다.`,
-      payload: { candidateCount: docs.length },
+      detail: `${result.summary} 이를 바탕으로 적격 가능성을 판단합니다.`,
+      payload: { candidateCount: result.items.length, source: result.source },
     });
 
     return {

@@ -43,6 +43,7 @@ type VectorHit = {
 @Injectable()
 export class RagTraceService {
   private readonly drafts = new Map<string, RagTraceDraft>();
+  private readonly persistChains = new Map<string, Promise<void>>();
 
   constructor(
     @InjectRepository(RagTrace)
@@ -74,6 +75,7 @@ export class RagTraceService {
     };
 
     this.drafts.set(id, draft);
+    this.enqueuePersist(id);
     this.recordEvent(id, {
       type: 'session',
       title: '질문 추적 시작',
@@ -296,7 +298,6 @@ export class RagTraceService {
     const draft = this.drafts.get(traceId);
     if (!draft) return null;
 
-    this.drafts.delete(traceId);
     if (input.answer) {
       draft.answer = input.answer;
     }
@@ -305,32 +306,11 @@ export class RagTraceService {
     }
     draft.status = input.status;
 
-    const startedAt = new Date(draft.startedAt);
-    const finishedAt = new Date();
-
-    const entity = this.traceRepo.create({
-      id: draft.id,
-      sessionId: draft.sessionId,
-      userId: draft.userId,
-      question: draft.question,
-      answer: draft.answer ?? null,
-      status: input.status,
-      routeType: draft.routeType ?? null,
-      model: draft.model ?? null,
-      toolNames: [...draft.toolNames],
-      events: draft.events,
-      graph: {
-        nodes: [...draft.nodes.values()],
-        edges: [...draft.edges.values()],
-      } satisfies RagTraceGraph,
-      summary: buildSummary(draft, input.status),
-      error: draft.error ?? null,
-      startedAt,
-      finishedAt,
-      durationMs: finishedAt.getTime() - startedAt.getTime(),
-    });
-
-    return this.traceRepo.save(entity);
+    await this.flushPersist(traceId);
+    const entity = await this.persistDraft(traceId);
+    this.drafts.delete(traceId);
+    this.persistChains.delete(traceId);
+    return entity;
   }
 
   async getRecentTraces(limit = 20, sessionId?: string) {
@@ -377,6 +357,7 @@ export class RagTraceService {
       at: new Date().toISOString(),
       ...input,
     });
+    this.enqueuePersist(traceId);
   }
 
   private mergeNodes(traceId: string, nodes: RagTraceNode[]) {
@@ -388,6 +369,7 @@ export class RagTraceService {
       const existing = draft.nodes.get(node.id);
       draft.nodes.set(node.id, existing ? { ...existing, ...node } : node);
     }
+    this.enqueuePersist(traceId);
   }
 
   private mergeEdges(traceId: string, edges: RagTraceEdge[]) {
@@ -398,10 +380,60 @@ export class RagTraceService {
       if (!edge.id) continue;
       draft.edges.set(edge.id, edge);
     }
+    this.enqueuePersist(traceId);
   }
 
   private questionNodeId(traceId: string) {
     return `question:${traceId}`;
+  }
+
+  private enqueuePersist(traceId: string) {
+    const next = (this.persistChains.get(traceId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        await this.persistDraft(traceId);
+      })
+      .catch(() => undefined);
+
+    this.persistChains.set(traceId, next);
+  }
+
+  private async flushPersist(traceId: string) {
+    await (this.persistChains.get(traceId) ?? Promise.resolve());
+  }
+
+  private async persistDraft(traceId: string) {
+    const draft = this.drafts.get(traceId);
+    if (!draft) {
+      return null;
+    }
+
+    const startedAt = new Date(draft.startedAt);
+    const finishedAt = draft.status === 'RUNNING' ? null : new Date();
+
+    const entity = this.traceRepo.create({
+      id: draft.id,
+      sessionId: draft.sessionId,
+      userId: draft.userId,
+      question: draft.question,
+      answer: draft.answer ?? null,
+      status: draft.status,
+      routeType: draft.routeType ?? null,
+      model: draft.model ?? null,
+      toolNames: [...draft.toolNames],
+      events: draft.events,
+      graph: {
+        nodes: [...draft.nodes.values()],
+        edges: [...draft.edges.values()],
+      } satisfies RagTraceGraph,
+      summary: buildSummary(draft, draft.status),
+      error: draft.error ?? null,
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt ? finishedAt.getTime() - startedAt.getTime() : null,
+    });
+
+    return this.traceRepo.save(entity);
   }
 }
 
@@ -410,7 +442,14 @@ function truncate(value: string, max: number) {
   return `${value.slice(0, max - 1)}…`;
 }
 
-function buildSummary(draft: RagTraceDraft, status: Exclude<RagTraceStatus, 'RUNNING'>) {
+function buildSummary(draft: RagTraceDraft, status: RagTraceStatus) {
+  if (status === 'RUNNING') {
+    if (draft.toolNames.size > 0) {
+      return `실행 중 · ${[...draft.toolNames].join(', ')} · 이벤트 ${draft.events.length}개`;
+    }
+    return `실행 중 · 이벤트 ${draft.events.length}개`;
+  }
+
   if (status === 'FAILED') {
     return draft.error ? truncate(draft.error, 160) : 'RAG 파이프라인 실행 중 오류가 발생했습니다.';
   }

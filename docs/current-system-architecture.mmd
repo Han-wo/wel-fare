@@ -1,0 +1,50 @@
+flowchart LR
+  User["User / Browser"] --> Web["Next.js 15 Web App"]
+  Web -->|"SSE / REST"| RagController["NestJS RagController"]
+  Web -->|"REST"| ChatController["NestJS ChatController"]
+  Web -->|"REST"| AdminController["NestJS Admin Trace API"]
+
+  RagController --> RagService["RagService"]
+  RagService --> Orchestrator["RagOrchestratorService"]
+  Orchestrator --> Analysis["QueryAnalysisService"]
+  Orchestrator --> Streaming["StreamingService"]
+  Orchestrator --> Retrievers["RetrieverServices"]
+  Orchestrator --> TraceFacade["TraceFacade"]
+
+  Retrievers --> Vector["VectorRetrievalService"]
+  Retrievers --> PolicyGraph["PolicyGraphService"]
+  Retrievers --> HousingGraph["HousingGraphService"]
+  Retrievers --> Suggestions["SuggestionService"]
+
+  Vector --> Qdrant["Qdrant"]
+  PolicyGraph --> Neo4j["Neo4j"]
+  HousingGraph --> Neo4j
+  Suggestions --> PolicyGraph
+  Suggestions --> Vector
+
+  Orchestrator --> MsgRepo["ChatMessage / ChatSession Repo"]
+  Streaming --> Runtime["ChatRuntimeService"]
+  Runtime --> Postgres["PostgreSQL"]
+  Runtime --> Redis["Redis"]
+
+  TraceFacade --> TraceService["RagTraceService"]
+  PolicyGraph --> PolicyTrace["PolicyTraceMapper"]
+  HousingGraph --> GraphTrace["GraphTraceMapper"]
+  PolicyTrace --> TraceService
+  GraphTrace --> TraceService
+  TraceService --> TraceTable["PostgreSQL rag_traces"]
+  AdminController --> TraceService
+
+  subgraph Graphs["LangGraph Route Graphs"]
+    SearchGraph["Search Graph\nHybrid ReAct Tool Calling"]
+    EligibilityGraph["Eligibility Graph\nDeterministic Workflow"]
+    ApplicationGraph["Application Assist Graph\nDeterministic Workflow"]
+  end
+
+  Analysis --> SearchGraph
+  Analysis --> EligibilityGraph
+  Analysis --> ApplicationGraph
+  SearchGraph --> Retrievers
+  EligibilityGraph --> Retrievers
+  ApplicationGraph --> Retrievers
+

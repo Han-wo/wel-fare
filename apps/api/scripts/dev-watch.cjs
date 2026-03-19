@@ -9,6 +9,7 @@ const envFilePath = path.join(rootDir, '.env');
 const extraFiles = ['.env', 'tsconfig.json', 'tsconfig.build.json']
   .map((file) => path.join(rootDir, file))
   .filter((file) => fs.existsSync(file));
+const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 
 const watchedFiles = new Set();
 const ignoredDirs = new Set(['dist', 'node_modules']);
@@ -17,6 +18,7 @@ let child = null;
 let restarting = false;
 let shuttingDown = false;
 let restartTimer = null;
+let needsMigration = true;
 
 function parseEnvFile() {
   if (!fs.existsSync(envFilePath)) return {};
@@ -72,21 +74,66 @@ function log(message) {
   process.stdout.write(`[api-dev] ${message}\n`);
 }
 
+function buildEnv() {
+  const envFromFile = parseEnvFile();
+  return {
+    ...envFromFile,
+    ...process.env,
+    NODE_ENV: process.env.NODE_ENV || envFromFile.NODE_ENV || 'development',
+  };
+}
+
+function isSchemaChange(filePath) {
+  if (!filePath) return true;
+
+  return (
+    filePath.includes(`${path.sep}src${path.sep}database${path.sep}migrations${path.sep}`) ||
+    filePath.endsWith(`${path.sep}src${path.sep}database${path.sep}data-source.ts`) ||
+    filePath.includes(`${path.sep}entities${path.sep}`) ||
+    filePath.endsWith(`${path.sep}src${path.sep}app.module.ts`)
+  );
+}
+
+function runMigrations(onDone) {
+  log('running pending migrations');
+
+  const migrationProcess = spawn(pnpmCommand, ['run', 'db:migrate'], {
+    cwd: rootDir,
+    env: buildEnv(),
+    stdio: 'inherit',
+  });
+
+  migrationProcess.on('exit', (code, signal) => {
+    if (code === 0) {
+      needsMigration = false;
+      onDone?.();
+      return;
+    }
+
+    const reason = signal ? `signal ${signal}` : `code ${code}`;
+    log(`migration step failed (${reason})`);
+  });
+}
+
+function ensureSchema(onDone, filePath) {
+  if (!needsMigration && !isSchemaChange(filePath)) {
+    onDone?.();
+    return;
+  }
+
+  needsMigration = true;
+  runMigrations(onDone);
+}
+
 function startChild() {
   log('server starting');
-
-  const envFromFile = parseEnvFile();
 
   child = spawn(
     process.execPath,
     ['-r', 'ts-node/register/transpile-only', '-r', 'tsconfig-paths/register', 'src/main.ts'],
     {
       cwd: rootDir,
-      env: {
-        ...envFromFile,
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV || envFromFile.NODE_ENV || 'development',
-      },
+      env: buildEnv(),
       stdio: 'inherit',
     },
   );
@@ -141,7 +188,7 @@ function restart(filePath) {
 
     killChild(() => {
       restarting = false;
-      startChild();
+      ensureSchema(startChild, filePath);
     });
   }, 120);
 }
@@ -187,4 +234,4 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 syncWatchedFiles();
 setInterval(syncWatchedFiles, 3000).unref();
-startChild();
+ensureSchema(startChild);

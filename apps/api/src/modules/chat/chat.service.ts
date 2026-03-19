@@ -47,7 +47,7 @@ export class ChatService {
   async deleteSession(userId: string, id: string) {
     const session = await this.getOwnedSession(userId, id);
 
-    this.chatRuntime.closeSession(session.id);
+    await this.chatRuntime.closeSession(session.id);
     await this.messageRepo.delete({ sessionId: session.id });
     await this.sessionRepo.delete(session.id);
   }

@@ -7,12 +7,11 @@ import {
   type AIMessageChunk,
   type BaseMessage,
 } from '@langchain/core/messages';
-import type { Document } from '@langchain/core/documents';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import type { UserProfile } from '@welfare-ai/shared-types';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
-import { type RagServices } from './rag.graph';
-import { getClarificationRequest } from './hitl.util';
+import { combineRetrievalPromptBlocks, type RetrievalResult } from './retrieval.types';
+import { type RagGraphServices } from './rag.graph';
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -30,12 +29,6 @@ const GraphState = Annotation.Root({
 });
 
 type ApplicationGraphState = typeof GraphState.State;
-
-const YOUTH = /청년|청년도약|청년월세|온통청년|청년수당|청년희망|청년내일/i;
-const HOUSING_SUB = /청약|분양|행복주택|국민임대|공공분양|신혼희망타운/i;
-const RENTAL = /전세|월세|주거급여|버팀목|임대주택|LH\s*임대|공공임대/i;
-const FACILITY = /복지관|시설|주간보호|활동지원 기관|센터/i;
-const DEADLINE = /지금\s*신청|현재\s*접수|마감\s*임박/i;
 
 function formatProfile(profile: UserProfile | null): string {
   if (!profile) {
@@ -55,18 +48,23 @@ function formatProfile(profile: UserProfile | null): string {
   ].join('\n');
 }
 
-function dedupeDocs(docs: Document[]): Document[] {
+function dedupeResults(results: RetrievalResult[]) {
   const seen = new Set<string>();
-  const result: Document[] = [];
+  const deduped: RetrievalResult[] = [];
 
-  for (const doc of docs) {
-    const policyId = typeof doc.metadata?.policyId === 'string' ? doc.metadata.policyId : doc.pageContent;
-    if (seen.has(policyId)) continue;
-    seen.add(policyId);
-    result.push(doc);
+  for (const result of results) {
+    const items = result.items.filter((item) => {
+      const key = `${item.source}:${item.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (items.length === 0) continue;
+    deduped.push({ ...result, items });
   }
 
-  return result;
+  return deduped;
 }
 
 async function streamAnswer(
@@ -104,7 +102,7 @@ async function streamAnswer(
   };
 }
 
-export function createApplicationAssistGraph(services: RagServices) {
+export function createApplicationAssistGraph(services: RagGraphServices) {
   const llm = new ChatOpenAI({
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
@@ -142,7 +140,7 @@ export function createApplicationAssistGraph(services: RagServices) {
   async function requestMissingInfo(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
-    const clarification = getClarificationRequest({
+    const clarification = services.queryAnalysis.getClarificationRequest({
       routeType: 'APPLICATION_ASSIST',
       question: state.question,
       profile: state.profile,
@@ -174,53 +172,46 @@ export function createApplicationAssistGraph(services: RagServices) {
   async function collectApplicationContext(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
-    const docsByTask: Array<Promise<Document[]>> = [];
-    const selectedSources: string[] = [];
-    const profile = state.profile;
-    const sidoCode = profile?.sidoCode ?? '';
+    const selectedSources = services.queryAnalysis.selectApplicationSources({
+      question: state.question,
+      hasProfile: Boolean(state.profile),
+    });
 
-    if (DEADLINE.test(state.question)) {
-      docsByTask.push(services.getUpcomingDeadlines(sidoCode, state.traceId));
-      selectedSources.push('get_upcoming_deadlines');
-    }
-    if (YOUTH.test(state.question)) {
-      docsByTask.push(services.searchYouthPolicies(state.question, state.traceId));
-      selectedSources.push('search_youth_policy');
-    }
-    if (HOUSING_SUB.test(state.question)) {
-      docsByTask.push(services.searchHousingSubscriptions(state.question, sidoCode, state.traceId));
-      selectedSources.push('search_housing_subscription');
-    }
-    if (RENTAL.test(state.question)) {
-      docsByTask.push(services.searchRentalSupport(state.question, sidoCode, state.traceId));
-      selectedSources.push('search_rental_support');
-    }
-    if (FACILITY.test(state.question)) {
-      docsByTask.push(services.searchWelfareFacilities(state.question, '', sidoCode, state.traceId));
-      selectedSources.push('search_welfare_facility');
-    }
-
-    if (docsByTask.length === 0) {
-      if (profile) {
-        const policyIds = await services.inferFromOntology(profile, state.question, state.traceId);
-        docsByTask.push(services.searchVectors(state.question, policyIds, state.traceId));
-        selectedSources.push('search_welfare');
-      } else {
-        docsByTask.push(services.searchByPolicyName(state.question, state.traceId));
-        selectedSources.push('check_policy_eligibility');
+    const retrievalTasks = selectedSources.map((source) => {
+      switch (source) {
+        case 'deadline':
+          return services.getUpcomingDeadlines(state.userId, 14, state.traceId);
+        case 'youth':
+          return services.searchYouthPolicies(state.question, state.traceId);
+        case 'housing_subscription':
+          return services.searchHousingSubscriptions(state.question, state.userId, state.traceId);
+        case 'rental_support':
+          return services.searchRentalSupport(state.question, state.userId, state.traceId);
+        case 'welfare_facility':
+          return services.searchWelfareFacilities(state.question, '', state.userId, state.traceId);
+        case 'policy_lookup':
+          return services.searchPolicyEligibility(state.question, state.userId, state.traceId);
+        case 'welfare':
+        default:
+          return services.searchWelfare(state.question, state.userId, state.traceId);
       }
-    }
+    });
 
-    const nestedDocs = await Promise.all(docsByTask);
-    const docs = dedupeDocs(nestedDocs.flat()).slice(0, 10);
+    const results = dedupeResults(await Promise.all(retrievalTasks));
+    const documentCount = results.reduce((count, result) => count + result.items.length, 0);
 
     const contextText = [
       '## 사용자 프로필',
-      formatProfile(profile),
+      formatProfile(state.profile),
       '',
       '## 신청 참고 자료',
-      docs.length > 0
-        ? docs.map((doc, index) => `### 자료 ${index + 1}\n${doc.pageContent}`).join('\n\n---\n\n')
+      results.length > 0
+        ? combineRetrievalPromptBlocks(
+            results.map((result) => ({
+              title: `${result.source} 결과`,
+              result,
+            })),
+          )
         : '관련 신청 자료를 찾지 못했습니다.',
       '',
       '위 자료만 사용해서 신청 절차와 준비사항을 정리하세요.',
@@ -229,8 +220,8 @@ export function createApplicationAssistGraph(services: RagServices) {
     services.recordEvent(state.traceId, {
       type: 'decision',
       title: '신청도움 workflow 실행',
-      detail: `${selectedSources.join(', ')} 기준으로 신청 자료 ${docs.length}건을 정리했습니다.`,
-      payload: { selectedSources, documentCount: docs.length },
+      detail: `${selectedSources.join(', ')} 기준으로 신청 자료 ${documentCount}건을 정리했습니다.`,
+      payload: { selectedSources, documentCount },
     });
 
     return {
