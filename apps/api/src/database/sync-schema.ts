@@ -1,10 +1,12 @@
+import 'dotenv/config';
 import { DataSource } from 'typeorm';
 import * as path from 'path';
+import { getRequiredEnv } from '../common/env.util';
 
 async function syncSchema() {
   const ds = new DataSource({
     type: 'postgres',
-    url: process.env.DATABASE_URL ?? 'postgresql://welfare:welfare_pass@localhost:5432/welfare_ai',
+    url: getRequiredEnv('DATABASE_URL'),
     entities: [path.join(__dirname, '../modules/**/entities/*.entity.{ts,js}')],
     synchronize: false,
     logging: true,

@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "nest start --watch",
+    "dev": "node scripts/dev-watch.cjs",
+    "dev:nest": "nest start --watch",
     "start": "node dist/main",
     "lint": "eslint \"src/**/*.ts\"",
     "type-check": "tsc --noEmit",
@@ -22,6 +23,7 @@
     "db:seed:facility": "ts-node -r dotenv/config --transpile-only src/database/seeds/welfare-facility.seed.ts",
     "db:seed:housing-anno": "ts-node -r dotenv/config --transpile-only src/database/seeds/housing-announcement.seed.ts",
     "db:seed:admin": "ts-node -r dotenv/config --transpile-only src/database/seeds/admin.seed.ts",
+    "db:seed:youth-policy": "ts-node -r dotenv/config --transpile-only src/database/seeds/youth-policy.seed.ts",
     "db:seed:applyhome": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome.seed.ts",
     "db:seed:applyhome-cmpet": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-cmpet.seed.ts",
     "db:seed:applyhome-stat": "ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-stat.seed.ts"

@@ -5,10 +5,11 @@
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
+import { getRequiredEnv } from '../../common/env.util';
 
 const AppDataSource = new DataSource({
   type: 'postgres',
-  url: process.env.DATABASE_URL ?? 'postgresql://welfare:welfare_pass@localhost:5432/welfare_ai',
+  url: getRequiredEnv('DATABASE_URL'),
   synchronize: true,
   entities: [__dirname + '/../../modules/**/entities/*.entity.ts'],
   logging: false,
@@ -17,8 +18,8 @@ const AppDataSource = new DataSource({
 async function main() {
   await AppDataSource.initialize();
 
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@welfareai.kr';
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'WelfareAdmin2026!';
+  const ADMIN_EMAIL = getRequiredEnv('ADMIN_EMAIL');
+  const ADMIN_PASSWORD = getRequiredEnv('ADMIN_PASSWORD');
   const ADMIN_NAME = '관리자';
 
   const userRepo = AppDataSource.getRepository('users');

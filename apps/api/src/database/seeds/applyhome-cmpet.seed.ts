@@ -11,8 +11,14 @@ import axios from 'axios';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
-const API_KEY = process.env.HOUSING_API_KEY ?? process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://api.odcloud.kr/api/ApplyhomeInfoCmpetRtSvc/v1';
 const PER_PAGE = 1000;
 const EMBED_BATCH = 20;
@@ -21,9 +27,12 @@ const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
 const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
-  neo4j.auth.basic(process.env.NEO4J_USERNAME ?? 'neo4j', process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass'),
+  neo4j.auth.basic(
+    process.env.NEO4J_USERNAME ?? 'neo4j',
+    getRequiredEnv('NEO4J_PASSWORD'),
+  ),
 );
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 interface CmpetRecord {
   PBLANC_NO: string;
@@ -48,6 +57,10 @@ interface PblancSummary {
   rank1Rate: number;
   supplyTypes: string[];
 }
+
+type PreparedCmpetSummary = PreparedSyncItem<PblancSummary> & {
+  policyName: string;
+};
 
 // ── 데이터 수집 ───────────────────────────────────────────
 async function fetchAll(endpoint: string, source: string): Promise<CmpetRecord[]> {
@@ -165,27 +178,56 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
+function prepareSummaries(
+  summaries: PblancSummary[],
+  names: Map<string, string>,
+): PreparedCmpetSummary[] {
+  return summaries.map((summary) => {
+    const policyId = `cmpet_${summary.pblancNo}`;
+    const content = buildContent(summary, names.get(summary.pblancNo));
+    const policyName = names.get(summary.pblancNo) ?? summary.pblancNo;
+    return {
+      item: summary,
+      policyId,
+      graphId: `applyhome_${summary.pblancNo}`,
+      policyName,
+      content,
+      syncHash: makeSyncHash({
+        policyId,
+        policyName,
+        content,
+        source: summary.source,
+        totalSupply: summary.totalSupply,
+        totalReq: summary.totalReq,
+        avgRate: summary.avgRate,
+        maxRate: summary.maxRate,
+        rank1Rate: summary.rank1Rate,
+      }),
+    };
+  });
+}
+
 // ── Qdrant upsert ─────────────────────────────────────────
-async function upsertQdrant(summaries: PblancSummary[], names: Map<string, string>): Promise<void> {
+async function upsertQdrant(summaries: PreparedCmpetSummary[]): Promise<void> {
   for (let i = 0; i < summaries.length; i += EMBED_BATCH) {
     const batch = summaries.slice(i, i + EMBED_BATCH);
-    const texts = batch.map((s) => buildContent(s, names.get(s.pblancNo)));
-    const embeddings = await embedTexts(texts);
-    const points = batch.map((s, idx) => ({
+    const embeddings = await embedTexts(batch.map((item) => item.content));
+    const points = batch.map(({ item: s, policyId, policyName, content, syncHash }, idx) => ({
       id: pointId(s.pblancNo, s.source),
       vector: embeddings[idx],
       payload: {
-        policyId: `cmpet_${s.pblancNo}`,
-        policyName: names.get(s.pblancNo) ?? s.pblancNo,
+        policyId,
+        policyName,
         category: '청약 경쟁률',
         totalSupply: s.totalSupply,
         totalReq: s.totalReq,
         avgRate: s.avgRate,
         maxRate: s.maxRate,
         rank1Rate: s.rank1Rate,
-        content: buildContent(s, names.get(s.pblancNo)),
+        content,
         status: 'active',
         source: 'applyhome_cmpet',
+        syncHash,
       },
     }));
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -197,10 +239,10 @@ async function upsertQdrant(summaries: PblancSummary[], names: Map<string, strin
 }
 
 // ── Neo4j 업데이트 ────────────────────────────────────────
-async function updateNeo4j(summaries: PblancSummary[]): Promise<void> {
+async function updateNeo4j(summaries: PreparedCmpetSummary[]): Promise<void> {
   const session = neo4jDriver.session();
   try {
-    for (const s of summaries) {
+    for (const { item: s, syncHash } of summaries) {
       // HousingAnnouncement에 경쟁률 property 업데이트 (존재하면)
       await session.run(
         `
@@ -209,7 +251,8 @@ async function updateNeo4j(summaries: PblancSummary[]): Promise<void> {
         SET ann.avgCmpetRate = $avgRate,
             ann.maxCmpetRate = $maxRate,
             ann.rank1CmpetRate = $rank1Rate,
-            ann.totalReqCnt = $totalReq
+            ann.totalReqCnt = $totalReq,
+            ann.cmpetSyncHash = $syncHash
         `,
         {
           applyhomeId: `applyhome_${s.pblancNo}`,
@@ -218,6 +261,7 @@ async function updateNeo4j(summaries: PblancSummary[]): Promise<void> {
           maxRate: s.maxRate,
           rank1Rate: s.rank1Rate,
           totalReq: s.totalReq,
+          syncHash,
         },
       ).catch(() => {});
     }
@@ -277,13 +321,40 @@ async function main() {
   const names = await fetchHouseNames(summaries.map(s => s.pblancNo));
   console.log(`공고명 조회: ${names.size}건`);
 
-  console.log('Qdrant 저장 중...');
-  await upsertQdrant(summaries, names);
+  const prepared = prepareSummaries(summaries, names);
+  const plan = await buildIncrementalSyncPlan({
+    client: qdrant,
+    collectionName: COLLECTION,
+    preparedItems: prepared,
+    driver: neo4jDriver,
+    graphLabel: 'HousingAnnouncement',
+    graphHashProperty: 'cmpetSyncHash',
+  });
+  console.log(
+    `증분 대상 - 벡터 ${plan.vectorUpdates.length}개, 그래프 ${plan.graphUpdates.length}개, 스킵 ${plan.skippedCount}개`,
+  );
 
-  console.log('\nNeo4j 업데이트 중...');
-  await updateNeo4j(summaries);
+  if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
+    console.log('✅ 변경 없음');
+    return;
+  }
 
-  console.log(`\n청약홈 경쟁률 ${summaries.length}개 공고 적재 완료!`);
+  if (plan.vectorUpdates.length > 0) {
+    console.log('Qdrant 저장 중...');
+    await upsertQdrant(plan.vectorUpdates);
+  }
+
+  if (plan.graphUpdates.length > 0) {
+    console.log('\nNeo4j 업데이트 중...');
+    await updateNeo4j(plan.graphUpdates);
+  }
+
+  console.log(`\n청약홈 경쟁률 증분 동기화 완료!`);
 }
 
-main().catch(console.error).finally(async () => { await neo4jDriver.close(); });
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => { await neo4jDriver.close(); });

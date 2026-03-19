@@ -14,17 +14,24 @@
 import axios from 'axios';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
+import { getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
-const API_KEY = process.env.HOUSING_API_KEY ?? process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://api.odcloud.kr/api/ApplyhomeStatSvc/v1';
 const PER_PAGE = 1000;
 const EMBED_BATCH = 20;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 type StatRecord = Record<string, unknown>;
+type PreparedStatGroup = PreparedSyncItem<{ id: string; label: string; content: string }>;
 
 // ── 데이터 수집 ───────────────────────────────────────────
 async function fetchAll(endpoint: string): Promise<StatRecord[]> {
@@ -294,20 +301,21 @@ function pointId(key: string): number {
 }
 
 // ── Qdrant upsert ─────────────────────────────────────────
-async function upsertQdrant(groups: Array<{ id: string; label: string; content: string }>): Promise<void> {
+async function upsertQdrant(groups: PreparedStatGroup[]): Promise<void> {
   for (let i = 0; i < groups.length; i += EMBED_BATCH) {
     const batch = groups.slice(i, i + EMBED_BATCH);
-    const embeddings = await embedTexts(batch.map(g => g.content));
-    const points = batch.map((g, idx) => ({
-      id: pointId(`stat_${g.id}`),
+    const embeddings = await embedTexts(batch.map((g) => g.content));
+    const points = batch.map(({ item: g, policyId, content, syncHash }, idx) => ({
+      id: pointId(policyId),
       vector: embeddings[idx],
       payload: {
-        policyId: `stat_${g.id}`,
+        policyId,
         policyName: g.label,
         category: '청약 통계',
-        content: g.content,
+        content,
         status: 'active',
         source: 'applyhome_stat',
+        syncHash,
       },
     }));
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -351,9 +359,39 @@ async function main() {
     return;
   }
 
-  console.log(`\n  총 ${groups.length}개 통계 문서 Qdrant 저장 중...`);
-  await upsertQdrant(groups);
-  console.log(`\n청약홈 통계 ${groups.length}개 문서 적재 완료!`);
+  const prepared: PreparedStatGroup[] = groups.map((group) => {
+    const policyId = `stat_${group.id}`;
+    return {
+      item: group,
+      policyId,
+      content: group.content,
+      syncHash: makeSyncHash({
+        policyId,
+        content: group.content,
+        label: group.label,
+      }),
+    };
+  });
+  const plan = await buildIncrementalSyncPlan({
+    client: qdrant,
+    collectionName: COLLECTION,
+    preparedItems: prepared,
+  });
+  console.log(
+    `\n  증분 대상 - 벡터 ${plan.vectorUpdates.length}개, 스킵 ${plan.skippedCount}개`,
+  );
+
+  if (plan.vectorUpdates.length === 0) {
+    console.log('  변경 없음');
+    return;
+  }
+
+  console.log(`\n  총 ${plan.vectorUpdates.length}개 통계 문서 Qdrant 저장 중...`);
+  await upsertQdrant(plan.vectorUpdates);
+  console.log(`\n청약홈 통계 ${plan.vectorUpdates.length}개 문서 증분 적재 완료!`);
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

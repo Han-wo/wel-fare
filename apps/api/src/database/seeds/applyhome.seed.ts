@@ -14,9 +14,15 @@ import axios from 'axios';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { getRequiredEnv } from '../../common/env.util';
+import {
+  buildIncrementalSyncPlan,
+  makeSyncHash,
+  type PreparedSyncItem,
+} from './incremental-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
-const API_KEY = process.env.HOUSING_API_KEY ?? process.env.WELFARE_API_KEY ?? '';
+const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://api.odcloud.kr/api/ApplyhomeInfoDetailSvc/v1';
 const PER_PAGE = 100;
 const EMBED_BATCH = 20;
@@ -27,10 +33,10 @@ const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
     process.env.NEO4J_USERNAME ?? 'neo4j',
-    process.env.NEO4J_PASSWORD ?? 'welfare_neo4j_pass',
+    getRequiredEnv('NEO4J_PASSWORD'),
   ),
 );
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 // ── 청약지역 약칭 → Neo4j Region 코드 매핑 ──────────────
 const AREA_TO_REGION_CODE: Record<string, string> = {
@@ -64,6 +70,8 @@ interface ApplyhomeItem {
   HMPG_ADRES?: string;
   source: 'apt' | 'urbty' | 'remndr' | 'pbl_pvt_rent' | 'opt';
 }
+
+type PreparedApplyhomeItem = PreparedSyncItem<ApplyhomeItem>;
 
 // ── 유틸 ─────────────────────────────────────────────────
 function formatDate(d: string | null | undefined): string {
@@ -170,13 +178,38 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return res.data.map((d) => d.embedding);
 }
 
+function prepareApplyhomeItems(items: ApplyhomeItem[]): PreparedApplyhomeItem[] {
+  return items.map((item) => {
+    const policyId = `applyhome_${item.PBLANC_NO}`;
+    const content = buildPageContent(item);
+    return {
+      item,
+      policyId,
+      graphId: policyId,
+      content,
+      syncHash: makeSyncHash({
+        policyId,
+        content,
+        source: item.source,
+        region: item.SUBSCRPT_AREA_CODE_NM,
+        address: item.HSSPLY_ADRES,
+        supplyCount: item.TOT_SUPLY_HSHLDCO,
+        winnerDate: item.PRZWNER_PRESNATN_DE,
+      }),
+    };
+  });
+}
+
 // ── Qdrant upsert ────────────────────────────────────────
-async function upsertToQdrant(items: ApplyhomeItem[], embeddings: number[][]): Promise<void> {
-  const points = items.map((item, i) => ({
+async function upsertToQdrant(
+  items: PreparedApplyhomeItem[],
+  embeddings: number[][],
+): Promise<void> {
+  const points = items.map(({ item, policyId, content, syncHash }, i) => ({
     id: makePointId(item.PBLANC_NO, item.source),
     vector: embeddings[i],
     payload: {
-      policyId: `applyhome_${item.PBLANC_NO}`,
+      policyId,
       policyName: item.HOUSE_NM,
       category: item.HOUSE_DETAIL_SECD_NM || item.HOUSE_SECD_NM,
       region: item.SUBSCRPT_AREA_CODE_NM,
@@ -188,10 +221,11 @@ async function upsertToQdrant(items: ApplyhomeItem[], embeddings: number[][]): P
       subscptEndde: item.SUBSCRPT_RCEPT_ENDDE,
       winnerDate: item.PRZWNER_PRESNATN_DE,
       moveInYM: item.MVN_PREARNGE_YM,
-      content: buildPageContent(item),
+      content,
       status: 'active',
       source: 'applyhome',
       url: item.PBLANC_URL,
+      syncHash,
     },
   }));
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -206,12 +240,11 @@ async function upsertToQdrant(items: ApplyhomeItem[], embeddings: number[][]): P
 }
 
 // ── Neo4j upsert ─────────────────────────────────────────
-async function upsertToNeo4j(items: ApplyhomeItem[]): Promise<void> {
+async function upsertToNeo4j(items: PreparedApplyhomeItem[]): Promise<void> {
   const session = neo4jDriver.session();
   try {
-    for (const item of items) {
+    for (const { item, policyId: id, syncHash } of items) {
       if (!item.PBLANC_NO) continue;
-      const id = `applyhome_${item.PBLANC_NO}`;
       const regionCode = AREA_TO_REGION_CODE[item.SUBSCRPT_AREA_CODE_NM] ?? '';
       try {
         await session.run(
@@ -231,6 +264,7 @@ async function upsertToNeo4j(items: ApplyhomeItem[]): Promise<void> {
               ann.pcUrl = $pcUrl,
               ann.annoType = 'applyhome',
               ann.source = 'applyhome',
+              ann.applyhomeSyncHash = $syncHash,
               ann.updatedAt = datetime()
           `,
           {
@@ -247,6 +281,7 @@ async function upsertToNeo4j(items: ApplyhomeItem[]): Promise<void> {
             suplyHoCo: String(item.TOT_SUPLY_HSHLDCO),
             address: item.HSSPLY_ADRES,
             pcUrl: item.PBLANC_URL,
+            syncHash,
           },
         );
         // Region 연결
@@ -297,21 +332,54 @@ async function main() {
   const allItems = [...aptItems, ...urbtyItems, ...remndrItems, ...pblPvtItems, ...optItems];
   console.log(`   총 ${allItems.length}건 처리 시작`);
 
-  let done = 0;
-  for (let i = 0; i < allItems.length; i += EMBED_BATCH) {
-    const batch = allItems.slice(i, i + EMBED_BATCH);
-    const texts = batch.map(buildPageContent);
-    const embeddings = await embedTexts(texts);
+  const prepared = prepareApplyhomeItems(allItems);
+  const plan = await buildIncrementalSyncPlan({
+    client: qdrant,
+    collectionName: COLLECTION,
+    preparedItems: prepared,
+    driver: neo4jDriver,
+    graphLabel: 'HousingAnnouncement',
+    graphHashProperty: 'applyhomeSyncHash',
+  });
+  console.log(
+    `   증분 대상 - 벡터 ${plan.vectorUpdates.length}건, 그래프 ${plan.graphUpdates.length}건, 스킵 ${plan.skippedCount}건`,
+  );
+
+  if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
+    console.log('✅ 변경 없음');
+    return;
+  }
+
+  const graphUpdateIds = new Set(plan.graphUpdates.map((item) => item.policyId));
+  let vectorDone = 0;
+  for (let i = 0; i < plan.vectorUpdates.length; i += EMBED_BATCH) {
+    const batch = plan.vectorUpdates.slice(i, i + EMBED_BATCH);
+    const embeddings = await embedTexts(batch.map((item) => item.content));
+    const graphBatch = batch.filter((item) => graphUpdateIds.has(item.policyId));
     await Promise.all([
       upsertToQdrant(batch, embeddings),
-      upsertToNeo4j(batch),
+      graphBatch.length > 0 ? upsertToNeo4j(graphBatch) : Promise.resolve(),
     ]);
-    done += batch.length;
-    process.stdout.write(`   [${done}/${allItems.length}] 처리 완료\r`);
+    vectorDone += batch.length;
+    process.stdout.write(`   벡터 [${vectorDone}/${plan.vectorUpdates.length}] 처리 완료\r`);
   }
-  console.log(`\n청약홈 분양정보 ${allItems.length}건 적재 완료!`);
+
+  if (plan.graphOnlyUpdates.length > 0) {
+    let graphDone = 0;
+    for (let i = 0; i < plan.graphOnlyUpdates.length; i += EMBED_BATCH) {
+      const batch = plan.graphOnlyUpdates.slice(i, i + EMBED_BATCH);
+      await upsertToNeo4j(batch);
+      graphDone += batch.length;
+      process.stdout.write(`   그래프 [${graphDone}/${plan.graphOnlyUpdates.length}] 처리 완료\r`);
+    }
+  }
+
+  console.log(`\n청약홈 분양정보 증분 동기화 완료!`);
 }
 
 main()
-  .catch(console.error)
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
   .finally(async () => { await neo4jDriver.close(); });
