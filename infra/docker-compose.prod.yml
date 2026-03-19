@@ -125,7 +125,9 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_REGION: ${AWS_REGION:-ap-northeast-2}
       S3_BUCKET: ${S3_BUCKET:-}
-      WELFARE_API_KEY: ${WELFARE_API_KEY:-}
+      PUBLIC_DATA_API_KEY: ${PUBLIC_DATA_API_KEY:-}
+      BOKJIRO_API_KEY: ${BOKJIRO_API_KEY:-}
+      YOUTH_CENTER_API_KEY: ${YOUTH_CENTER_API_KEY:-}
     ports:
       - "3001:3001"
     depends_on:

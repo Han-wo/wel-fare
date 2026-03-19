@@ -19,6 +19,7 @@ export interface UserProfile {
 }
 
 interface UserStore {
+  _hasHydrated: boolean;
   accessToken: string | null;
   userId: string | null;
   userName: string | null;
@@ -32,6 +33,7 @@ interface UserStore {
 export const useUserStore = create<UserStore>()(
   persist(
     (set) => ({
+      _hasHydrated: false,
       accessToken: null,
       userId: null,
       userName: null,
@@ -45,6 +47,9 @@ export const useUserStore = create<UserStore>()(
     }),
     {
       name: 'welfare-user',
+      onRehydrateStorage: () => (state) => {
+        if (state) state._hasHydrated = true;
+      },
       partialize: (state) => ({
         accessToken: state.accessToken,
         userId: state.userId,

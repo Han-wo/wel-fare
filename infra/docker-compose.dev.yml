@@ -1,14 +1,13 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16-alpine
     container_name: welfare_postgres
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: welfare_ai
       POSTGRES_USER: welfare
-      POSTGRES_PASSWORD: welfare_pass
     ports:
       - "5432:5432"
     volumes:
@@ -25,8 +24,9 @@ services:
     image: neo4j:5-community
     container_name: welfare_neo4j
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      NEO4J_AUTH: neo4j/welfare_neo4j_pass
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
       NEO4J_dbms_memory_heap_initial__size: "512m"
@@ -66,18 +66,20 @@ services:
     image: redis:7-alpine
     container_name: welfare_redis
     restart: unless-stopped
+    env_file:
+      - .env
     command: >
-      redis-server
+      sh -c 'redis-server
       --appendonly yes
-      --requirepass welfare_redis_pass
+      --requirepass "$$REDIS_PASSWORD"
       --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy allkeys-lru'
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "welfare_redis_pass", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
       interval: 10s
       timeout: 5s
       retries: 5
