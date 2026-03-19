@@ -1,149 +1,202 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Bot, User, Send, Loader2, ArrowDown } from 'lucide-react';
+import { ArrowDown, Bot, Loader2, Send, User } from 'lucide-react';
 import { useChat } from '../../../../hooks/useChat';
 import { MarkdownMessage } from '../../../../components/markdown';
+import { formatClockKorean } from '../../../../lib/datetime';
+
+const STARTER_PROMPTS = [
+  '내 조건에서 지금 신청 가능한 주거 지원 찾아줘',
+  '청년 정책 중 마감 임박한 것만 보여줘',
+  '복지시설이나 돌봄 지원도 같이 찾아줘',
+];
 
 export default function ChatSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const searchParams = useSearchParams();
-  const { messages, isStreaming, sendMessage } = useChat(sessionId);
+  const { messages, isStreaming, isThinking, isLoading, sendMessage } = useChat(sessionId);
 
   const [input, setInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const initialSent = useRef(false);
 
-  /* URL 쿼리에 초기 질문이 있으면 자동 전송 */
   useEffect(() => {
-    const q = searchParams.get('q');
-    if (q && !initialSent.current) {
+    const question = searchParams.get('q');
+    if (question && !initialSent.current && !isLoading) {
       initialSent.current = true;
-      sendMessage(q);
+      void sendMessage(question);
     }
-  }, [searchParams, sendMessage]);
+  }, [isLoading, searchParams, sendMessage]);
 
-  /* 스트리밍 중 자동 스크롤 */
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    bottomRef.current?.scrollIntoView({ behavior: reducedMotion ? 'auto' : behavior });
+  }, []);
+
   useEffect(() => {
-    if (isStreaming) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, isStreaming]);
+    scrollToBottom(messages.length > 0 ? 'auto' : 'smooth');
+  }, [messages, scrollToBottom]);
 
-  /* 스크롤 다운 버튼 */
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 48), 220)}px`;
+  }, [input]);
+
   const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 200);
+    const element = scrollRef.current;
+    if (!element) return;
+    setShowScrollBtn(element.scrollHeight - element.scrollTop - element.clientHeight > 220);
   };
 
   const handleSend = () => {
-    const q = input.trim();
-    if (!q || isStreaming) return;
+    const question = input.trim();
+    if (!question || isStreaming) return;
     setInput('');
-    sendMessage(q);
+    void sendMessage(question);
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#09090b]">
-      {/* 메시지 영역 */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-6"
-      >
-        <div className="max-w-3xl mx-auto space-y-6">
-          {messages.length === 0 && !isStreaming && (
-            <div className="text-center text-gray-600 text-sm py-20">
-              질문을 입력하면 AI가 맞춤 복지 혜택을 안내합니다
+    <div className="relative flex h-full flex-col">
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-6 py-6 md:px-8 md:py-8">
+        <div className="mx-auto flex max-w-3xl flex-col gap-6">
+          {isLoading && (
+            <div className="flex items-center justify-center gap-2 py-20 text-sm text-[var(--text-muted)]">
+              <Loader2 size={16} className="animate-spin" />
+              대화 내역을 불러오는 중입니다
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-              {/* 아바타 */}
-              <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-1 ${
-                msg.role === 'assistant'
-                  ? 'bg-gradient-to-br from-blue-500 to-violet-600'
-                  : 'bg-zinc-800 border border-white/10'
-              }`}>
-                {msg.role === 'assistant'
-                  ? <Bot size={15} className="text-white" />
-                  : <User size={15} className="text-gray-300" />
-                }
+          {!isLoading && messages.length === 0 && !isStreaming && (
+            <div>
+              <p className="mb-3 text-sm font-semibold text-[var(--text-primary)]">추천 질문</p>
+              <div className="flex flex-wrap gap-2">
+                {STARTER_PROMPTS.map((question) => (
+                  <button key={question} onClick={() => void sendMessage(question)} className="badge-soft">
+                    {question}
+                  </button>
+                ))}
               </div>
+            </div>
+          )}
 
-              {/* 메시지 버블 */}
-              <div className={`max-w-[80%] ${msg.role === 'user' ? 'items-end' : 'items-start'} flex flex-col`}>
-                <div className={`rounded-2xl px-4 py-3 text-sm ${
-                  msg.role === 'user'
-                    ? 'bg-brand-600 text-white rounded-tr-sm'
-                    : 'bg-zinc-900 border border-white/5 text-gray-100 rounded-tl-sm'
-                }`}>
-                  {msg.role === 'assistant' ? (
-                    <MarkdownMessage content={msg.content} />
-                  ) : (
-                    <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                  )}
-                  {msg.role === 'assistant' && msg.content === '' && isStreaming && (
-                    <span className="inline-flex gap-1 items-center text-gray-500">
-                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+          {messages.map((message) => {
+            const isAssistant = message.role === 'assistant';
+
+            return (
+              <div key={message.id} className={`flex ${isAssistant ? 'justify-start' : 'justify-end'}`}>
+                <div className={`${isAssistant ? 'max-w-[88%]' : 'w-auto max-w-[72%]'}`}>
+                  <div className="mb-2 flex items-center gap-2 px-1 text-xs text-[var(--text-muted)]">
+                    <span
+                      className={`flex h-6 w-6 items-center justify-center rounded-full ${
+                        isAssistant
+                          ? 'bg-[var(--brand-soft)] text-[var(--brand-strong)]'
+                          : 'bg-[#e8edf4] text-[var(--text-secondary)]'
+                      }`}
+                    >
+                      {isAssistant ? <Bot size={13} /> : <User size={13} />}
                     </span>
-                  )}
+                    <span>{isAssistant ? '복지 안내' : '내 질문'}</span>
+                    {message.createdAt ? <span>{formatClockKorean(message.createdAt)}</span> : null}
+                  </div>
+
+                  <div
+                    className={`inline-block max-w-full rounded-[28px] border px-5 py-4 text-sm leading-7 ${
+                      isAssistant
+                        ? 'border-[var(--panel-border)] bg-white/82 text-[var(--text-primary)] shadow-[0_10px_26px_rgba(20,31,45,0.05)]'
+                        : 'border-transparent bg-[linear-gradient(135deg,#2f6f5b,#487a67)] text-[#f9f6ef]'
+                    }`}
+                  >
+                    {isAssistant ? (
+                      <MarkdownMessage content={message.content} />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {isThinking && (
+            <div className="flex justify-start">
+              <div className="w-auto max-w-[88%]">
+                <div className="mb-2 flex items-center gap-2 px-1 text-xs text-[var(--text-muted)]">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--brand-soft)] text-[var(--brand-strong)]">
+                    <Bot size={13} />
+                  </span>
+                  <span>복지 안내</span>
+                </div>
+
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--panel-border)] bg-white/82 px-4 py-3 text-[var(--text-muted)] shadow-[0_8px_18px_rgba(20,31,45,0.04)]">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-bounce"
+                    style={{ animationDelay: '0ms' }}
+                  />
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-bounce"
+                    style={{ animationDelay: '150ms' }}
+                  />
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-current motion-safe:animate-bounce"
+                    style={{ animationDelay: '300ms' }}
+                  />
                 </div>
               </div>
             </div>
-          ))}
+          )}
+
           <div ref={bottomRef} />
         </div>
       </div>
 
-      {/* 스크롤 다운 버튼 */}
       {showScrollBtn && (
         <button
-          onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })}
-          className="absolute bottom-24 right-8 w-9 h-9 bg-zinc-800 border border-white/10 rounded-full flex items-center justify-center shadow-lg hover:bg-zinc-700 transition"
+          onClick={() => scrollToBottom()}
+          aria-label="맨 아래로 이동"
+          className="absolute bottom-32 right-6 flex h-11 w-11 items-center justify-center rounded-full border border-[var(--panel-border)] bg-white/92 text-[var(--text-secondary)] shadow-lg transition hover:bg-white hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(47,111,91,0.22)]"
         >
-          <ArrowDown size={15} className="text-gray-400" />
+          <ArrowDown size={16} />
         </button>
       )}
 
-      {/* 입력창 */}
-      <div className="border-t border-white/5 px-4 py-4">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-end gap-3 bg-zinc-900 border border-white/10 rounded-2xl px-4 py-3 focus-within:border-brand-500/50 transition">
+      <div className="border-t border-[var(--panel-border)] bg-[rgba(244,239,230,0.82)] px-6 py-4 backdrop-blur md:px-8">
+        <div className="mx-auto max-w-3xl">
+          <div className="flex items-end gap-3 rounded-[26px] border border-[var(--panel-border)] bg-white/86 px-4 py-3 shadow-[0_14px_32px_rgba(20,31,45,0.05)]">
             <textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
                   handleSend();
                 }
               }}
-              placeholder="복지 혜택에 대해 질문하세요... (Shift+Enter 줄바꿈)"
+              placeholder="질문을 입력하세요"
               rows={1}
-              className="flex-1 bg-transparent text-sm text-white outline-none resize-none placeholder:text-gray-600 max-h-32 overflow-y-auto leading-relaxed"
-              style={{ minHeight: '24px' }}
+              className="flex-1 resize-none overflow-y-auto bg-transparent py-[11px] text-[15px] leading-6 text-[var(--text-primary)] focus-visible:outline-none"
+              style={{ minHeight: 48 }}
+              disabled={isLoading}
             />
+
             <button
               onClick={handleSend}
               disabled={!input.trim() || isStreaming}
-              className="w-9 h-9 bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-700 disabled:text-gray-500 rounded-xl flex items-center justify-center transition shrink-0"
+              className="button-primary h-11 w-11 shrink-0 rounded-2xl px-0 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label={isStreaming ? '응답 생성 중' : '메시지 전송'}
             >
-              {isStreaming
-                ? <Loader2 size={16} className="text-white animate-spin" />
-                : <Send size={15} className="text-white" />
-              }
+              {isStreaming ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             </button>
           </div>
-          <p className="text-center text-xs text-gray-700 mt-2">
-            AI 응답은 참고용입니다. 정확한 신청 조건은 공식 기관에서 확인하세요.
-          </p>
         </div>
       </div>
     </div>

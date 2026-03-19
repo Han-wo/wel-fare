@@ -1,7 +1,8 @@
 'use client';
-import { useState, useEffect } from 'react';
+
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { User, Save, Loader2, CheckCircle } from 'lucide-react';
+import { CheckCircle, Loader2, Save, User } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useUserStore } from '../../../store/user.store';
 
@@ -42,14 +43,22 @@ interface ProfileForm {
   childrenCount: number;
 }
 
-const inputCls = 'w-full bg-zinc-900 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-brand-500 transition';
+const inputCls =
+  'field-shell w-full rounded-2xl px-4 py-3 text-sm text-[var(--text-primary)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(47,111,91,0.18)]';
 const selectCls = `${inputCls} appearance-none`;
-const labelCls = 'block text-xs font-medium text-gray-400 mb-1.5';
+const labelCls =
+  'mb-2 block text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]';
 
 export default function ProfilePage() {
-  const { setProfile, profile: storeProfile } = useUserStore();
+  const setProfile = useUserStore((s) => s.setProfile);
   const [saved, setSaved] = useState(false);
-  const { register, handleSubmit, reset, watch, formState: { isSubmitting } } = useForm<ProfileForm>();
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { isSubmitting },
+  } = useForm<ProfileForm>();
 
   useEffect(() => {
     api<ProfileForm>('/profile')
@@ -66,26 +75,51 @@ export default function ProfilePage() {
     await api('/profile', { method: 'PUT', body: data });
     setProfile(data);
     setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    window.setTimeout(() => setSaved(false), 3000);
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#09090b]">
-      <div className="max-w-2xl mx-auto px-6 py-10">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-violet-600 rounded-xl flex items-center justify-center">
-            <User size={18} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-white">내 프로필</h1>
-            <p className="text-gray-400 text-sm">입력한 정보를 바탕으로 맞춤 복지 혜택을 추천합니다</p>
-          </div>
-        </div>
+    <div className="h-full overflow-y-auto px-6 py-8">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <section className="surface hero-grid rounded-[32px] px-7 py-8 md:px-8">
+          <div className="grid gap-6 lg:grid-cols-[1fr_0.8fr]">
+            <div>
+              <span className="section-kicker">Profile Settings</span>
+              <h1 className="display-text mt-5 text-4xl font-semibold text-[var(--text-primary)]">
+                맞춤 추천 기준이 되는
+                <br />
+                프로필을 정리하세요
+              </h1>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-[var(--text-secondary)]">
+                나이, 지역, 가구, 소득, 특수 상황을 저장하면 복지 찾기 화면에서 더 정확한 복지와
+                주거 지원을 선별할 수 있습니다.
+              </p>
+            </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-          {/* 기본 정보 */}
+            <div className="surface-soft rounded-[28px] p-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--brand-soft)] text-[var(--brand-strong)]">
+                  <User size={18} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--text-primary)]">추천 품질을 높이는 정보</p>
+                  <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                    지역, 주거 상태, 자녀 여부가 반영됩니다.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2">
+                <span className="badge-soft">지역별 제도 필터링</span>
+                <span className="badge-soft">생애주기 기반 추천</span>
+                <span className="badge-soft">가구 조건별 우선순위 정렬</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
           <Section title="기본 정보">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className={labelCls}>생년월일</label>
                 <input {...register('birthDate')} type="date" className={inputCls} />
@@ -101,7 +135,6 @@ export default function ProfilePage() {
             </div>
           </Section>
 
-          {/* 거주 및 가구 */}
           <Section title="거주 및 가구 정보">
             <div className="space-y-4">
               <div>
@@ -112,7 +145,7 @@ export default function ProfilePage() {
                   ))}
                 </select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className={labelCls}>가구 형태</label>
                   <select {...register('householdType')} className={selectCls}>
@@ -125,7 +158,7 @@ export default function ProfilePage() {
                 <div>
                   <label className={labelCls}>가구원 수</label>
                   <select {...register('householdCount', { valueAsNumber: true })} className={selectCls}>
-                    {[1,2,3,4,5,6].map((n) => <option key={n} value={n}>{n}인</option>)}
+                    {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}인</option>)}
                     <option value={7}>7인 이상</option>
                   </select>
                 </div>
@@ -133,7 +166,6 @@ export default function ProfilePage() {
             </div>
           </Section>
 
-          {/* 직업 및 소득 */}
           <Section title="직업 및 소득">
             <div className="space-y-4">
               <div>
@@ -157,7 +189,6 @@ export default function ProfilePage() {
             </div>
           </Section>
 
-          {/* 특수 상황 */}
           <Section title="추가 정보">
             <div className="space-y-2">
               {[
@@ -167,16 +198,19 @@ export default function ProfilePage() {
                 { key: 'isSingleParent' as const, label: '한부모가정' },
                 { key: 'hasChildren' as const, label: '자녀 있음 (만 18세 미만)' },
               ].map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-3 py-2.5 px-4 rounded-xl border border-white/5 hover:border-white/10 cursor-pointer transition">
-                  <input {...register(key)} type="checkbox" className="w-4 h-4 accent-brand-600" />
-                  <span className="text-sm text-gray-300">{label}</span>
+                <label
+                  key={key}
+                  className="flex cursor-pointer items-center gap-3 rounded-2xl border border-[var(--panel-border)] bg-white/60 px-4 py-3 text-sm text-[var(--text-secondary)] transition hover:bg-white/90 hover:text-[var(--text-primary)]"
+                >
+                  <input {...register(key)} type="checkbox" className="h-4 w-4 accent-[var(--brand)]" />
+                  <span>{label}</span>
                 </label>
               ))}
               {hasChildren && (
-                <div className="pl-4">
+                <div className="pt-3">
                   <label className={labelCls}>자녀 수</label>
                   <select {...register('childrenCount', { valueAsNumber: true })} className={selectCls}>
-                    {[1,2,3,4,5].map((n) => <option key={n} value={n}>{n}명</option>)}
+                    {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}명</option>)}
                   </select>
                 </div>
               )}
@@ -186,14 +220,23 @@ export default function ProfilePage() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
+            className="button-primary flex w-full items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? (
-              <><Loader2 size={16} className="animate-spin" /> 저장 중...</>
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                저장 중...
+              </>
             ) : saved ? (
-              <><CheckCircle size={16} /> 저장되었습니다</>
+              <>
+                <CheckCircle size={16} />
+                저장되었습니다
+              </>
             ) : (
-              <><Save size={16} /> 저장하기</>
+              <>
+                <Save size={16} />
+                저장하기
+              </>
             )}
           </button>
         </form>
@@ -204,9 +247,11 @@ export default function ProfilePage() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-zinc-900/50 border border-white/5 rounded-2xl p-5">
-      <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">{title}</h2>
-      {children}
+    <div className="surface rounded-[28px] p-6">
+      <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+        {title}
+      </h2>
+      <div className="mt-5">{children}</div>
     </div>
   );
 }

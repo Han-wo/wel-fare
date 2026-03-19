@@ -1,163 +1,341 @@
 'use client';
+
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import {
-  Sparkles, MessageSquare, User, Settings, LogOut,
-  LayoutDashboard, ChevronRight, Plus, Shield,
-} from 'lucide-react';
+import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { MessageSquare, User, LogOut, ChevronLeft, Plus, Shield, Trash2 } from 'lucide-react';
 import { useUserStore } from '../../store/user.store';
 import { api } from '../../lib/api';
+import {
+  CHAT_SESSIONS_UPDATED,
+  emitChatSessionCloseRequested,
+  emitChatSessionsUpdated,
+} from '../../lib/chat-events';
+import { BrandLockup, BrandMark } from '../../components/brand-mark';
+import { formatRelativeKoreanTime } from '../../lib/datetime';
 
-interface Session { id: string; title: string; updatedAt: string }
+interface Session {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { accessToken, userName, userRole, clearAuth } = useUserStore();
+  const hasHydrated = useUserStore((s) => s._hasHydrated);
+  const accessToken = useUserStore((s) => s.accessToken);
+  const userRole = useUserStore((s) => s.userRole);
+  const clearAuth = useUserStore((s) => s.clearAuth);
+
   const [sessions, setSessions] = useState<Session[]>([]);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
-    if (!accessToken) { router.replace('/login'); }
-  }, [accessToken, router]);
+    if (hasHydrated && !accessToken) {
+      router.replace('/login');
+    }
+  }, [hasHydrated, accessToken, router]);
+
+  const refreshSessions = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const data = await api<Session[]>('/chat/sessions');
+      startTransition(() => {
+        setSessions(data);
+      });
+    } catch {
+      // ignore
+    }
+  }, [accessToken]);
+
+  const goToSession = useCallback(
+    (sessionId: string) => {
+      router.push(`/chat/${sessionId}`);
+    },
+    [router],
+  );
 
   useEffect(() => {
     if (!accessToken) return;
-    api<Session[]>('/chat/sessions').then(setSessions).catch(() => {});
-  }, [accessToken]);
 
-  const handleLogout = () => {
+    void refreshSessions();
+    const onUpdate = () => {
+      void refreshSessions();
+    };
+
+    window.addEventListener(CHAT_SESSIONS_UPDATED, onUpdate);
+    return () => window.removeEventListener(CHAT_SESSIONS_UPDATED, onUpdate);
+  }, [accessToken, refreshSessions]);
+
+  const deleteSession = useCallback(
+    async (event: React.MouseEvent, sessionId: string, title: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (!window.confirm(`"${title || '새 대화'}" 대화를 삭제하시겠습니까?`)) return;
+
+      try {
+        await api(`/chat/sessions/${sessionId}`, { method: 'DELETE' });
+        startTransition(() => {
+          setSessions((prev) => prev.filter((session) => session.id !== sessionId));
+        });
+        emitChatSessionsUpdated();
+        if (pathname === `/chat/${sessionId}`) {
+          router.push('/chat');
+        }
+      } catch {
+        // ignore
+      }
+    },
+    [pathname, router],
+  );
+
+  const handleLogout = useCallback(() => {
     clearAuth();
     localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
     router.push('/');
-  };
+  }, [clearAuth, router]);
 
-  const newChat = async () => {
+  const activeSessionId = useMemo(() => {
+    if (!pathname.startsWith('/chat/')) return null;
+    return pathname.split('/')[2] ?? null;
+  }, [pathname]);
+
+  const newChat = useCallback(async () => {
     try {
-      const session = await api<{ id: string }>('/chat/sessions', { method: 'POST', body: { title: '새 대화' } });
+      if (activeSessionId) {
+        const confirmed = window.confirm('진행 중인 대화를 종료하고 새 질문을 시작하시겠습니까?');
+        if (!confirmed) return;
+
+        emitChatSessionCloseRequested(activeSessionId);
+        await api(`/chat/sessions/${activeSessionId}/close`, { method: 'POST' });
+      }
+
+      const session = await api<{ id: string; title: string }>('/chat/sessions', {
+        method: 'POST',
+        body: { title: '새 대화' },
+      });
+      emitChatSessionsUpdated();
       router.push(`/chat/${session.id}`);
     } catch {
       router.push('/chat');
     }
-  };
+  }, [activeSessionId, router]);
 
-  const navItems = [
-    { href: '/chat', icon: MessageSquare, label: '채팅' },
-    { href: '/profile', icon: User, label: '내 프로필' },
-    ...(userRole === 'ADMIN' ? [{ href: '/admin', icon: Shield, label: '관리자' }] : []),
-  ];
+  const navItems = useMemo(
+    () => [
+      { href: '/chat', icon: MessageSquare, label: '복지 찾기' },
+      { href: '/profile', icon: User, label: '내 프로필' },
+      ...(userRole === 'ADMIN' ? [{ href: '/admin', icon: Shield, label: '관리 콘솔' }] : []),
+    ],
+    [userRole],
+  );
 
-  if (!accessToken) return null;
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) ?? null,
+    [activeSessionId, sessions],
+  );
+
+  const storedSessions = useMemo(
+    () => sessions.filter((session) => session.id !== activeSessionId),
+    [activeSessionId, sessions],
+  );
+
+  if (!hasHydrated || !accessToken) return null;
 
   return (
-    <div className="flex h-screen bg-[#09090b] overflow-hidden">
-      {/* ── 사이드바 ── */}
-      <aside className={`flex flex-col border-r border-white/5 transition-all duration-300 ${collapsed ? 'w-16' : 'w-64'} shrink-0`}>
-        {/* 로고 */}
-        <div className="flex items-center justify-between px-4 py-4 border-b border-white/5">
-          {!collapsed && (
-            <Link href="/chat" className="flex items-center gap-2 font-bold text-sm">
-              <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-violet-600 rounded-lg flex items-center justify-center shrink-0">
-                <Sparkles size={13} className="text-white" />
-              </div>
-              <span className="gradient-text">WelfareAI</span>
-            </Link>
-          )}
-          {collapsed && (
-            <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-violet-600 rounded-lg flex items-center justify-center mx-auto">
-              <Sparkles size={13} className="text-white" />
-            </div>
-          )}
-          {!collapsed && (
-            <button onClick={() => setCollapsed(true)} className="text-gray-600 hover:text-gray-400 transition">
-              <ChevronRight size={14} />
-            </button>
-          )}
-        </div>
+    <div className="app-shell flex h-screen overflow-hidden text-[var(--text-primary)]">
+      <aside
+        className={`glass flex shrink-0 flex-col border-r border-[var(--panel-border)] transition-[width] duration-300 ${
+          collapsed ? 'w-20' : 'w-[300px]'
+        }`}
+      >
+        <div className="border-b border-[var(--panel-border)] px-4 py-4">
+          <div className={`flex items-start ${collapsed ? 'justify-center' : 'justify-between'} gap-3`}>
+            {!collapsed ? (
+              <>
+                <Link href="/chat" className="flex min-w-0 items-center gap-3">
+                  <BrandLockup compact />
+                </Link>
 
-        {/* 새 채팅 버튼 */}
-        <div className="px-3 py-3">
-          <button
-            onClick={newChat}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-brand-600/20 hover:bg-brand-600/30 text-brand-400 text-sm font-medium transition ${collapsed ? 'justify-center' : ''}`}
-          >
-            <Plus size={16} />
-            {!collapsed && '새 대화'}
-          </button>
-        </div>
-
-        {/* 최근 대화 목록 */}
-        {!collapsed && sessions.length > 0 && (
-          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
-            <p className="text-xs text-gray-600 px-2 py-1.5 uppercase tracking-wider">최근 대화</p>
-            {sessions.slice(0, 20).map((s) => (
-              <Link
-                key={s.id}
-                href={`/chat/${s.id}`}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-gray-400 hover:text-white hover:bg-white/5 transition truncate ${
-                  pathname === `/chat/${s.id}` ? 'bg-white/5 text-white' : ''
-                }`}
+                <button
+                  onClick={() => setCollapsed(true)}
+                  aria-label="사이드바 접기"
+                  className="rounded-full border border-[var(--panel-border)] p-2 text-[var(--text-muted)] transition hover:border-[rgba(34,79,66,0.18)] hover:bg-white/80 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(47,111,91,0.22)]"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setCollapsed(false)}
+                aria-label="사이드바 펼치기"
+                className="rounded-2xl"
               >
-                <MessageSquare size={12} className="shrink-0" />
-                <span className="truncate">{s.title || '새 대화'}</span>
-              </Link>
-            ))}
+                <BrandMark className="h-5 w-5" shellClassName="h-11 w-11 rounded-2xl" />
+              </button>
+            )}
           </div>
-        )}
-        {!collapsed && sessions.length === 0 && <div className="flex-1" />}
-        {collapsed && <div className="flex-1" />}
 
-        {/* 하단 네비게이션 */}
-        <div className="border-t border-white/5 p-3 space-y-0.5">
-          {navItems.map(({ href, icon: Icon, label }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition ${
-                pathname.startsWith(href)
-                  ? 'bg-white/10 text-white'
-                  : 'text-gray-500 hover:text-white hover:bg-white/5'
-              } ${collapsed ? 'justify-center' : ''}`}
+          <div className="mt-4">
+            <button
+              onClick={newChat}
+              aria-label="새 질문 시작"
+              className={`button-primary w-full ${collapsed ? 'px-0' : ''}`}
             >
-              <Icon size={16} />
-              {!collapsed && label}
-            </Link>
-          ))}
-          <button
-            onClick={handleLogout}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-gray-500 hover:text-red-400 hover:bg-red-500/5 transition ${collapsed ? 'justify-center' : ''}`}
-          >
-            <LogOut size={16} />
-            {!collapsed && '로그아웃'}
-          </button>
+              <Plus size={16} />
+              {!collapsed && '새 질문'}
+            </button>
+          </div>
         </div>
 
-        {/* 유저 정보 */}
-        {!collapsed && (
-          <div className="px-4 py-3 border-t border-white/5 flex items-center gap-2.5">
-            <div className="w-7 h-7 bg-gradient-to-br from-blue-600 to-violet-600 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0">
-              {userName?.charAt(0) ?? 'U'}
+        <div className="flex-1 overflow-y-auto px-3 py-4">
+          {collapsed ? (
+            <div className="space-y-2">
+              {sessions.slice(0, 10).map((session) => (
+                <Link
+                  key={session.id}
+                  href={`/chat/${session.id}`}
+                  className={`flex h-12 items-center justify-center rounded-2xl border transition ${
+                    pathname === `/chat/${session.id}`
+                      ? 'border-[rgba(47,111,91,0.2)] bg-[var(--brand-soft)] text-[var(--brand-strong)]'
+                      : 'border-[var(--panel-border)] bg-white/50 text-[var(--text-muted)] hover:bg-white/85 hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <MessageSquare size={15} />
+                </Link>
+              ))}
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-white truncate">{userName}</p>
-              <p className="text-xs text-gray-600">{userRole === 'ADMIN' ? '관리자' : '일반 회원'}</p>
+          ) : sessions.length === 0 ? (
+            <div className="surface-soft rounded-[26px] px-5 py-10 text-center">
+              <p className="text-sm font-semibold text-[var(--text-primary)]">아직 시작한 질문이 없습니다</p>
+              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                새 질문을 시작하면 최근 대화가 이곳에 저장됩니다.
+              </p>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="space-y-4">
+              {activeSession ? (
+                <section className="space-y-2">
+                  <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+                    현재 대화
+                  </p>
+                  <SessionListItem
+                    session={activeSession}
+                    active
+                    onOpen={goToSession}
+                    onDelete={deleteSession}
+                  />
+                </section>
+              ) : null}
 
-        {/* 접힘 상태 토글 */}
-        {collapsed && (
-          <button onClick={() => setCollapsed(false)} className="p-4 text-gray-600 hover:text-gray-400 flex justify-center border-t border-white/5">
-            <ChevronRight size={14} className="rotate-180" />
-          </button>
-        )}
+              {storedSessions.length > 0 ? (
+                <section className="space-y-2">
+                  <p className="px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+                    저장된 대화
+                  </p>
+                  {storedSessions.slice(0, 20).map((session) => (
+                    <SessionListItem
+                      key={session.id}
+                      session={session}
+                      active={false}
+                      onOpen={goToSession}
+                      onDelete={deleteSession}
+                    />
+                  ))}
+                </section>
+              ) : null}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-[var(--panel-border)] px-3 py-3">
+          <div className={collapsed ? 'space-y-2' : 'space-y-2.5'}>
+            {navItems.map(({ href, icon: Icon, label }) => {
+              const active = pathname.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`flex items-center rounded-2xl px-3 py-3 text-sm transition ${
+                    active
+                      ? 'bg-[var(--brand-soft)] text-[var(--brand-strong)]'
+                      : 'text-[var(--text-secondary)] hover:bg-white/80 hover:text-[var(--text-primary)]'
+                  } ${collapsed ? 'justify-center' : 'gap-3'}`}
+                >
+                  <Icon size={16} />
+                  {!collapsed && label}
+                </Link>
+              );
+            })}
+
+            <button
+              onClick={handleLogout}
+              className={`flex w-full items-center rounded-2xl px-3 py-3 text-sm text-[var(--text-secondary)] transition hover:bg-red-400/10 hover:text-red-600 ${
+                collapsed ? 'justify-center' : 'gap-3'
+              }`}
+            >
+              <LogOut size={16} />
+              {!collapsed && '로그아웃'}
+            </button>
+          </div>
+        </div>
       </aside>
 
-      {/* ── 메인 컨텐츠 ── */}
-      <main className="flex-1 overflow-hidden">
-        {children}
-      </main>
+      <main className="flex-1 overflow-hidden">{children}</main>
+    </div>
+  );
+}
+
+function SessionListItem({
+  session,
+  active,
+  onOpen,
+  onDelete,
+}: {
+  session: Session;
+  active: boolean;
+  onOpen: (sessionId: string) => void;
+  onDelete: (event: React.MouseEvent, sessionId: string, title: string) => Promise<void>;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(session.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen(session.id);
+        }
+      }}
+      className={`group rounded-[22px] border px-4 py-3.5 transition ${
+        active
+          ? 'border-[rgba(47,111,91,0.16)] bg-[var(--brand-soft)]'
+          : 'border-transparent bg-white/50 hover:border-[var(--panel-border)] hover:bg-white/82'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-[var(--text-primary)]">
+            {session.title || '새 대화'}
+          </p>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            {formatRelativeKoreanTime(session.updatedAt)}
+          </p>
+        </div>
+
+        <button
+          onClick={(event) => void onDelete(event, session.id, session.title)}
+          type="button"
+          aria-label={`"${session.title || '새 대화'}" 삭제`}
+          className="rounded-full border border-transparent p-1.5 text-[var(--text-muted)] opacity-0 transition group-hover:opacity-100 hover:border-red-400/14 hover:bg-red-400/10 hover:text-red-500 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/20"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
     </div>
   );
 }

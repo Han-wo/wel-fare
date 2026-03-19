@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Activity, Database, RefreshCcw, ShieldCheck } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useUserStore } from '../../store/user.store';
+import { AdminConsoleNav } from '../../components/admin-console-nav';
 
 interface QdrantStats {
   collection: string;
@@ -30,6 +32,25 @@ interface Stats {
   sync: SyncStatus;
 }
 
+interface SyncLog {
+  id: string;
+  runId: string;
+  seedKey: string;
+  seedName: string;
+  script: string;
+  trigger: 'MANUAL' | 'CRON' | 'SEED';
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED';
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  vectorCount: number | null;
+  graphCount: number | null;
+  skippedCount: number | null;
+  summary: string | null;
+  stdout: string | null;
+  stderr: string | null;
+}
+
 const NODE_LABELS: Record<string, string> = {
   Policy: '중앙/지자체 복지정책',
   WelfareFacility: '사회복지시설',
@@ -48,31 +69,43 @@ export default function AdminPage() {
   const userRole = useUserStore((s) => s.userRole);
   const accessToken = useUserStore((s) => s.accessToken);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [logs, setLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!accessToken) { router.replace('/login'); return; }
-    if (userRole && userRole !== 'ADMIN') { router.replace('/chat'); }
+    if (!accessToken) {
+      router.replace('/login');
+      return;
+    }
+    if (userRole && userRole !== 'ADMIN') {
+      router.replace('/chat');
+    }
   }, [accessToken, userRole, router]);
 
   const fetchStats = useCallback(async () => {
     try {
-      const data = await api<Stats>('/admin/stats');
-      setStats(data);
+      const [statsData, logData] = await Promise.all([
+        api<Stats>('/admin/stats'),
+        api<SyncLog[]>('/admin/sync/logs?limit=20'),
+      ]);
+      setStats(statsData);
+      setLogs(logData);
       setError(null);
     } catch {
-      setError('통계 조회 실패. 로그인 상태를 확인하세요.');
+      setError('통계 조회에 실패했습니다. 로그인 상태와 관리자 권한을 확인하세요.');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchStats();
-    const timer = setInterval(fetchStats, 10000); // 10초마다 갱신
-    return () => clearInterval(timer);
+    void fetchStats();
+    const timer = window.setInterval(() => {
+      void fetchStats();
+    }, 10000);
+    return () => window.clearInterval(timer);
   }, [fetchStats]);
 
   const handleSync = async () => {
@@ -87,173 +120,305 @@ export default function AdminPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400 text-sm">로딩 중...</div>
+      <div className="flex h-full items-center justify-center px-6 py-8">
+        <div className="surface rounded-[28px] px-6 py-5 text-sm text-[var(--text-secondary)]">
+          관리자 통계를 불러오는 중입니다.
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-red-400 text-sm">{error}</div>
+      <div className="flex h-full items-center justify-center px-6 py-8">
+        <div className="surface rounded-[28px] border border-rose-300 px-6 py-5 text-sm text-rose-700">
+          {error}
+        </div>
       </div>
     );
   }
 
   const totalNodes = stats
-    ? Object.values(stats.neo4j.nodes).reduce((a, b) => a + b, 0)
+    ? Object.values(stats.neo4j.nodes).reduce((sum, count) => sum + count, 0)
     : 0;
 
+  const maxNodeCount = stats ? Math.max(...Object.values(stats.neo4j.nodes), 1) : 1;
+
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-5xl mx-auto space-y-8">
+    <div className="h-full overflow-y-auto px-6 py-8">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <section className="surface hero-grid rounded-[32px] px-7 py-8 md:px-8">
+          <div className="flex flex-col gap-7">
+            <AdminConsoleNav
+              actions={
+                <button
+                  onClick={handleSync}
+                  disabled={syncing || stats?.sync.isSyncing}
+                  className="button-primary h-12 rounded-full px-5 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCcw size={16} className={syncing || stats?.sync.isSyncing ? 'animate-spin' : ''} />
+                  {syncing || stats?.sync.isSyncing ? '동기화 중...' : '지금 동기화'}
+                </button>
+              }
+            />
 
-        {/* 헤더 */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-white">데이터 관리 대시보드</h1>
-            <p className="text-gray-400 text-sm mt-1">Qdrant 벡터 DB · Neo4j 그래프 DB 현황</p>
+            <div>
+              <span className="section-kicker">Admin Console</span>
+              <h1 className="display-text mt-5 text-4xl font-semibold text-[var(--text-primary)]">
+                데이터 파이프라인과
+                <br />
+                벡터·그래프 적재 현황
+              </h1>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-[var(--text-secondary)]">
+                현재 적재 규모, 인덱싱 상태, 동기화 결과를 한 화면에서 확인하고 즉시 갱신할 수 있습니다.
+              </p>
+            </div>
           </div>
-          <button
-            onClick={handleSync}
-            disabled={syncing || stats?.sync.isSyncing}
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg text-sm font-medium transition-colors"
-          >
-            {syncing || stats?.sync.isSyncing ? '동기화 중...' : '지금 동기화'}
-          </button>
-        </div>
+        </section>
 
-        {/* 동기화 상태 */}
         {stats?.sync.lastSyncAt && (
-          <div className="bg-gray-900 rounded-xl p-4 text-sm text-gray-400 flex items-center gap-3">
-            <span className={`w-2 h-2 rounded-full ${stats.sync.isSyncing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`} />
+          <div className="surface-soft flex flex-wrap items-center gap-3 rounded-[28px] px-5 py-4 text-sm text-[var(--text-secondary)]">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                stats.sync.isSyncing ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'
+              }`}
+            />
             마지막 동기화: {new Date(stats.sync.lastSyncAt).toLocaleString('ko-KR')}
             {stats.sync.lastResult && !stats.sync.lastResult.success && (
-              <span className="text-red-400 ml-2">일부 실패</span>
+              <span className="text-rose-200">일부 실패</span>
             )}
           </div>
         )}
 
-        {/* 요약 카드 */}
-        <div className="grid grid-cols-3 gap-4">
+        <section className="grid gap-4 md:grid-cols-3">
           <StatCard
+            icon={Database}
             title="총 벡터 수"
             value={stats?.qdrant.pointsCount.toLocaleString() ?? '—'}
-            sub={`${stats?.qdrant.vectorSize ?? 0}차원 · ${stats?.qdrant.collection}`}
-            color="blue"
+            sub={`${stats?.qdrant.vectorSize ?? 0}차원 · ${stats?.qdrant.collection ?? '—'}`}
           />
           <StatCard
+            icon={ShieldCheck}
             title="총 그래프 노드"
             value={totalNodes.toLocaleString()}
             sub={`관계 ${stats?.neo4j.relationships.toLocaleString() ?? 0}개`}
-            color="purple"
           />
           <StatCard
+            icon={Activity}
             title="벡터 인덱스"
             value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '—'}
             sub={`상태: ${stats?.qdrant.status ?? '—'}`}
-            color="green"
           />
-        </div>
+        </section>
 
-        {/* Qdrant 상세 */}
-        <Section title="Qdrant 벡터 DB">
-          <div className="grid grid-cols-2 gap-3">
-            <InfoRow label="컬렉션" value={stats?.qdrant.collection ?? '—'} />
-            <InfoRow label="벡터 차원" value={String(stats?.qdrant.vectorSize ?? '—')} />
-            <InfoRow label="총 포인트" value={stats?.qdrant.pointsCount.toLocaleString() ?? '—'} />
-            <InfoRow label="인덱싱 완료" value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '—'} />
-          </div>
-        </Section>
-
-        {/* Neo4j 노드별 현황 */}
-        <Section title="Neo4j 그래프 DB — 노드 현황">
-          <div className="space-y-2">
-            {stats && Object.entries(stats.neo4j.nodes)
-              .sort(([, a], [, b]) => b - a)
-              .map(([label, count]) => (
-                <NodeBar
-                  key={label}
-                  label={NODE_LABELS[label] ?? label}
-                  rawLabel={label}
-                  count={count}
-                  max={Math.max(...Object.values(stats.neo4j.nodes))}
-                />
-              ))}
-            <div className="pt-2 border-t border-gray-800 flex justify-between text-xs text-gray-500">
-              <span>관계(Relationship)</span>
-              <span>{stats?.neo4j.relationships.toLocaleString()}개</span>
+        <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+          <div className="surface rounded-[28px] p-6">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+              Qdrant 벡터 DB
+            </h2>
+            <div className="mt-5 space-y-3">
+              <InfoRow label="컬렉션" value={stats?.qdrant.collection ?? '—'} />
+              <InfoRow label="벡터 차원" value={String(stats?.qdrant.vectorSize ?? '—')} />
+              <InfoRow label="총 포인트" value={stats?.qdrant.pointsCount.toLocaleString() ?? '—'} />
+              <InfoRow
+                label="인덱싱 완료"
+                value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '—'}
+              />
             </div>
           </div>
-        </Section>
 
-        {/* 데이터 소스별 설명 */}
-        <Section title="데이터 소스">
-          <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="surface rounded-[28px] p-6">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+              Neo4j 그래프 DB
+            </h2>
+            <div className="mt-5 space-y-3">
+              {stats &&
+                Object.entries(stats.neo4j.nodes)
+                  .sort(([, left], [, right]) => right - left)
+                  .map(([label, count]) => (
+                    <div key={label} className="flex items-center gap-3 text-sm">
+                      <div className="w-36 shrink-0 text-[var(--text-secondary)]">
+                        {NODE_LABELS[label] ?? label}
+                      </div>
+                        <div className="h-2 flex-1 rounded-full bg-[rgba(19,32,51,0.08)]">
+                          <div
+                          className="h-2 rounded-full bg-[linear-gradient(135deg,#2f6f5b,#6fa288)]"
+                          style={{ width: `${Math.round((count / maxNodeCount) * 100)}%` }}
+                        />
+                      </div>
+                      <div className="w-16 text-right text-[var(--text-primary)]">{count.toLocaleString()}</div>
+                    </div>
+                  ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="surface rounded-[28px] p-6">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+            데이터 소스
+          </h2>
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {[
               { name: '중앙부처 복지서비스', api: 'NationalWelfareInformations', schedule: '매일 새벽 2시' },
               { name: '지자체 복지서비스', api: 'LocalGovernmentWelfareInformations', schedule: '매일 새벽 2시' },
               { name: '공공임대주택 단지', api: 'HWSPR04', schedule: '매일 새벽 2시' },
               { name: '사회복지시설', api: 'sclWlfrFcltInfoInqirService1', schedule: '매일 새벽 2시' },
               { name: '공공주택 모집공고', api: 'HWSPR02', schedule: '매일 새벽 2시' },
-            ].map((src) => (
-              <div key={src.name} className="bg-gray-800 rounded-lg p-3">
-                <div className="font-medium text-white">{src.name}</div>
-                <div className="text-gray-400 text-xs mt-1">{src.api}</div>
-                <div className="text-blue-400 text-xs mt-1">⏰ {src.schedule}</div>
+              { name: '청년정책', api: 'youthPolicyList', schedule: '매일 새벽 2시' },
+            ].map((source) => (
+              <div key={source.name} className="surface-soft rounded-[24px] p-4">
+                <p className="text-sm font-semibold text-[var(--text-primary)]">{source.name}</p>
+                <p className="mt-2 text-sm text-[var(--text-secondary)]">{source.api}</p>
+                <p className="mt-2 text-xs uppercase tracking-[0.2em] text-[var(--brand)]">
+                  {source.schedule}
+                </p>
               </div>
             ))}
           </div>
-        </Section>
+        </section>
+
+        <section className="surface rounded-[28px] p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+                최근 동기화 로그
+              </h2>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                크론과 수동 실행 이력을 최근 순으로 보여줍니다.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 space-y-3">
+            {logs.length === 0 ? (
+              <div className="surface-soft rounded-[24px] px-4 py-5 text-sm text-[var(--text-secondary)]">
+                아직 저장된 동기화 로그가 없습니다.
+              </div>
+            ) : (
+              logs.map((log) => (
+                <div
+                  key={log.id}
+                  className="rounded-[24px] border border-[var(--panel-border)] bg-white/70 px-4 py-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-[var(--text-primary)]">{log.seedName}</p>
+                        <StatusBadge status={log.status} />
+                        <TriggerBadge trigger={log.trigger} />
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--text-muted)]">
+                        {new Date(log.startedAt).toLocaleString('ko-KR')}
+                        {log.finishedAt
+                          ? ` -> ${new Date(log.finishedAt).toLocaleTimeString('ko-KR')}`
+                          : ' -> 실행 중'}
+                        {log.durationMs ? ` · ${formatDuration(log.durationMs)}` : ''}
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                      {log.vectorCount !== null ? <MetricPill label="벡터" value={log.vectorCount} /> : null}
+                      {log.graphCount !== null ? <MetricPill label="그래프" value={log.graphCount} /> : null}
+                      {log.skippedCount !== null ? <MetricPill label="스킵" value={log.skippedCount} /> : null}
+                    </div>
+                  </div>
+
+                  {log.summary ? (
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[var(--text-secondary)]">
+                      {log.summary}
+                    </p>
+                  ) : null}
+
+                  {(log.stdout || log.stderr) ? (
+                    <details className="mt-3 rounded-[18px] border border-[var(--panel-border)] bg-[rgba(248,245,239,0.7)] px-4 py-3">
+                      <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                        Raw Log
+                      </summary>
+                      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)]">
+                        {log.stdout || ''}
+                        {log.stderr ? `\n\n[stderr]\n${log.stderr}` : ''}
+                      </pre>
+                    </details>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
 }
 
-function StatCard({ title, value, sub, color }: { title: string; value: string; sub: string; color: 'blue' | 'purple' | 'green' }) {
-  const colors = {
-    blue: 'border-blue-800 bg-blue-950/40',
-    purple: 'border-purple-800 bg-purple-950/40',
-    green: 'border-green-800 bg-green-950/40',
-  };
+function StatCard({
+  icon: Icon,
+  title,
+  value,
+  sub,
+}: {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  title: string;
+  value: string;
+  sub: string;
+}) {
   return (
-    <div className={`rounded-xl border p-5 ${colors[color]}`}>
-      <div className="text-gray-400 text-xs mb-2">{title}</div>
-      <div className="text-3xl font-bold text-white">{value}</div>
-      <div className="text-gray-500 text-xs mt-1">{sub}</div>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-gray-900 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">{title}</h2>
-      {children}
+    <div className="surface rounded-[28px] p-6">
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--brand-soft)] text-[var(--brand-strong)]">
+        <Icon size={18} />
+      </div>
+      <p className="mt-4 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+        {title}
+      </p>
+      <p className="mt-3 text-3xl font-semibold text-[var(--text-primary)]">{value}</p>
+      <p className="mt-2 text-sm text-[var(--text-secondary)]">{sub}</p>
     </div>
   );
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between items-center py-2 border-b border-gray-800 text-sm">
-      <span className="text-gray-400">{label}</span>
-      <span className="text-white font-mono">{value}</span>
+    <div className="flex items-center justify-between rounded-2xl border border-[var(--panel-border)] bg-white/60 px-4 py-3 text-sm">
+      <span className="text-[var(--text-secondary)]">{label}</span>
+      <span className="font-medium text-[var(--text-primary)]">{value}</span>
     </div>
   );
 }
 
-function NodeBar({ label, rawLabel, count, max }: { label: string; rawLabel: string; count: number; max: number }) {
-  const pct = Math.round((count / max) * 100);
+function StatusBadge({ status }: { status: SyncLog['status'] }) {
+  const style =
+    status === 'SUCCESS'
+      ? 'bg-emerald-100 text-emerald-700'
+      : status === 'FAILED'
+        ? 'bg-rose-100 text-rose-700'
+        : 'bg-amber-100 text-amber-700';
+
+  const label =
+    status === 'SUCCESS' ? '성공' : status === 'FAILED' ? '실패' : '실행 중';
+
+  return <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${style}`}>{label}</span>;
+}
+
+function TriggerBadge({ trigger }: { trigger: SyncLog['trigger'] }) {
+  const label =
+    trigger === 'CRON' ? '크론' : trigger === 'SEED' ? '개별 시드' : '수동 실행';
+
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <div className="w-36 text-gray-300 shrink-0">{label}</div>
-      <div className="flex-1 bg-gray-800 rounded-full h-1.5">
-        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="w-16 text-right text-gray-400 font-mono text-xs">{count.toLocaleString()}</div>
-      <div className="w-20 text-right text-gray-600 font-mono text-xs">{rawLabel}</div>
-    </div>
+    <span className="rounded-full bg-[rgba(47,111,91,0.1)] px-2.5 py-1 text-[11px] font-semibold text-[var(--brand-strong)]">
+      {label}
+    </span>
   );
+}
+
+function MetricPill({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="rounded-full border border-[var(--panel-border)] bg-white/80 px-2.5 py-1">
+      {label} {value.toLocaleString()}
+    </span>
+  );
+}
+
+function formatDuration(durationMs: number) {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}초`;
+  return `${Math.floor(durationMs / 60000)}분 ${Math.round((durationMs % 60000) / 1000)}초`;
 }

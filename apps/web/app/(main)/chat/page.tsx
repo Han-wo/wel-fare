@@ -1,24 +1,35 @@
 'use client';
+
 import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
-import { Bot, ArrowRight, Sparkles, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowRight, Loader2 } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useUserStore } from '../../../store/user.store';
+import { emitChatSessionsUpdated } from '../../../lib/chat-events';
+import { BrandLockup } from '../../../components/brand-mark';
+
+const QUICK_STARTS = [
+  '내 조건에서 지금 신청 가능한 주거 지원 찾아줘',
+  '청년 정책 중 마감 임박한 것만 보여줘',
+  '부모님 근처 복지시설과 돌봄 지원 같이 알려줘',
+  '저소득층 생활비 지원이 있는지 정리해줘',
+];
 
 export default function ChatIndexPage() {
   const router = useRouter();
-  const { userName, accessToken } = useUserStore();
+  const accessToken = useUserStore((s) => s.accessToken);
+
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
 
-  /* 백엔드에서 프로필 기반 추천 질문 가져오기 (sessionStorage 캐시 5분) */
   useEffect(() => {
     if (!accessToken) return;
 
-    const CACHE_KEY = 'suggestions_cache';
-    const cached = sessionStorage.getItem(CACHE_KEY);
+    const cacheKey = 'suggestions_cache';
+    const cached = sessionStorage.getItem(cacheKey);
+
     if (cached) {
       try {
         const { data, expiresAt } = JSON.parse(cached) as { data: string[]; expiresAt: number };
@@ -27,104 +38,133 @@ export default function ChatIndexPage() {
           setSuggestionsLoading(false);
           return;
         }
-      } catch { /* ignore */ }
+      } catch {
+        // ignore
+      }
     }
 
     setSuggestionsLoading(true);
     api<string[]>('/rag/suggestions')
       .then((data) => {
         setSuggestions(data);
-        sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data, expiresAt: Date.now() + 5 * 60 * 1000 }));
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({ data, expiresAt: Date.now() + 5 * 60 * 1000 }),
+        );
       })
       .catch(() => setSuggestions([]))
       .finally(() => setSuggestionsLoading(false));
   }, [accessToken]);
 
   const startChat = async (question?: string) => {
-    const q = question ?? input.trim();
-    if (!q) return;
+    const query = question ?? input.trim();
+    if (!query) return;
+
     setLoading(true);
     try {
       const session = await api<{ id: string }>('/chat/sessions', {
         method: 'POST',
-        body: { title: q.slice(0, 40) },
+        body: { title: query.slice(0, 40) },
       });
-      router.push(`/chat/${session.id}?q=${encodeURIComponent(q)}`);
+      emitChatSessionsUpdated();
+      router.push(`/chat/${session.id}?q=${encodeURIComponent(query)}`);
     } catch {
       setLoading(false);
     }
   };
 
+  const mergedSuggestions = useMemo(
+    () => [...new Set([...QUICK_STARTS, ...suggestions])].slice(0, 4),
+    [suggestions],
+  );
+
   return (
-    <div className="h-full flex flex-col items-center justify-center px-6 py-12 bg-[#09090b]">
-      <div className="w-full max-w-2xl">
-        {/* 환영 메시지 */}
-        <div className="text-center mb-10">
-          <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-violet-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/20">
-            <Sparkles size={24} className="text-white" />
+    <div className="h-full overflow-y-auto px-6 py-6 md:px-8 md:py-8">
+      <div className="mx-auto flex min-h-full max-w-5xl flex-col justify-center">
+        <div className="mx-auto mb-8 w-full max-w-4xl md:-translate-y-4">
+          <div className="relative mx-auto w-fit">
+            <div className="pulse-glow absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(67,171,212,0.14),transparent_68%)]" />
+            <div className="relative mx-auto w-fit">
+              <BrandLockup showCaption />
+            </div>
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">
-            안녕하세요, {userName ?? ''}님! 👋
-          </h1>
-          <p className="text-gray-400 text-sm leading-relaxed">
-            내 조건에 맞는 복지 혜택을 AI가 찾아드립니다.<br />
-            <span className="text-blue-400">프로필 정보를 기반으로</span> 맞춤 혜택을 추천합니다.
-          </p>
-        </div>
 
-        {/* 입력창 */}
-        <div className="bg-zinc-900 border border-white/10 rounded-2xl p-1 shadow-xl shadow-black/40 mb-6 focus-within:border-brand-500/50 transition">
-          <div className="flex items-center gap-3 px-4 py-3">
-            <Bot size={18} className="text-blue-400 shrink-0" />
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && startChat()}
-              placeholder="복지 혜택에 대해 자유롭게 질문하세요..."
-              className="flex-1 bg-transparent text-white text-sm outline-none placeholder:text-gray-600"
-              disabled={loading}
-            />
-            <button
-              onClick={() => startChat()}
-              disabled={!input.trim() || loading}
-              className="shrink-0 bg-brand-600 hover:bg-brand-700 disabled:bg-zinc-700 disabled:text-gray-500 text-white text-sm px-4 py-2 rounded-xl transition font-medium flex items-center gap-1.5"
-            >
-              {loading ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
-            </button>
-          </div>
-        </div>
-
-        {/* 맞춤 추천 질문 */}
-        <div>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex-1 h-px bg-white/5" />
-            <p className="text-xs text-gray-600 px-2">
-              {suggestionsLoading ? '추천 질문 불러오는 중...' : '내 프로필 맞춤 추천 질문'}
+          <div className="mt-5 text-center">
+            <p className="display-text text-[28px] font-semibold tracking-[-0.04em] text-[var(--text-primary)] md:text-[34px]">
+              지금 필요한 지원을 바로 물어보세요
             </p>
-            <div className="flex-1 h-px bg-white/5" />
+            <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">
+              대상 조건, 마감 여부, 공식 신청 경로만 먼저 간단하게 정리합니다.
+            </p>
+          </div>
+        </div>
+
+        <div className="mx-auto w-full max-w-4xl">
+          <section className="relative overflow-hidden rounded-[34px] border border-[var(--panel-border)] bg-white/86 px-5 py-4 shadow-[0_18px_40px_rgba(20,31,45,0.06)]">
+            <div className="absolute inset-x-10 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(67,171,212,0.34),transparent)]" />
+            <div className="flex items-center gap-3">
+              <input
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void startChat();
+                  }
+                }}
+                placeholder="어떤 지원을 찾고 있나요?"
+                className="single-line-input flex-1 self-center bg-transparent text-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus-visible:outline-none"
+                disabled={loading}
+              />
+
+              <button
+                onClick={() => void startChat()}
+                disabled={!input.trim() || loading}
+                className="button-primary h-14 w-14 rounded-[22px] px-0 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label={loading ? '질문 준비 중' : '질문 보내기'}
+              >
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
+              </button>
+            </div>
+          </section>
+
+          <div className="mt-4 flex items-center justify-between gap-3 px-1">
+            <p className="text-sm font-semibold text-[var(--text-primary)]">지금 많이 찾는 질문</p>
+            <p className="text-xs text-[var(--text-muted)]">클릭하면 바로 시작됩니다</p>
           </div>
 
-          {suggestionsLoading ? (
-            <div className="grid grid-cols-1 gap-2">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-11 bg-zinc-900/50 border border-white/5 rounded-xl animate-pulse" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2">
-              {suggestions.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => startChat(q)}
-                  disabled={loading}
-                  className="text-left px-4 py-3 rounded-xl bg-zinc-900 border border-white/5 hover:border-white/15 hover:bg-zinc-800 text-sm text-gray-300 hover:text-white transition group flex items-center justify-between"
-                >
-                  <span>{q}</span>
-                  <ArrowRight size={14} className="text-gray-600 group-hover:text-gray-400 shrink-0 ml-2" />
-                </button>
-              ))}
-            </div>
-          )}
+          <section className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {suggestionsLoading
+              ? [1, 2, 3, 4].map((index) => (
+                  <div
+                    key={index}
+                    className="h-[168px] animate-pulse rounded-[26px] border border-[var(--panel-border)] bg-white/58"
+                  />
+                ))
+              : mergedSuggestions.map((question, index) => (
+                  <button
+                    key={question}
+                    onClick={() => void startChat(question)}
+                    disabled={loading}
+                    className="surface-soft min-h-[156px] rounded-[26px] p-4 text-left transition hover:-translate-y-0.5 hover:border-[rgba(67,171,212,0.2)] hover:bg-white/92"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
+                      바로 시작
+                    </p>
+                    <p
+                      className="mt-4 text-[17px] leading-8 text-[var(--text-primary)]"
+                      style={{
+                        display: '-webkit-box',
+                        WebkitBoxOrient: 'vertical',
+                        WebkitLineClamp: 4,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {question}
+                    </p>
+                  </button>
+                ))}
+          </section>
         </div>
       </div>
     </div>
