@@ -54,7 +54,9 @@ RUN addgroup --system --gid 1001 nodejs \
  && adduser --system --uid 1001 --ingroup nodejs nestjs
 
 COPY --from=builder --chown=nestjs:nodejs /prod/api .
+COPY --chown=nestjs:nodejs apps/api/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 USER nestjs
 EXPOSE 3001
-CMD ["node", "dist/main"]
+CMD ["/app/docker-entrypoint.sh"]

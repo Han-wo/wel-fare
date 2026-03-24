@@ -25,6 +25,7 @@ interface UserStore {
   userName: string | null;
   userRole: string | null;
   profile: UserProfile | null;
+  markHydrated: () => void;
   setAuth: (token: string, userId: string, name: string, role?: string) => void;
   setProfile: (profile: UserProfile) => void;
   clearAuth: () => void;
@@ -39,6 +40,7 @@ export const useUserStore = create<UserStore>()(
       userName: null,
       userRole: null,
       profile: null,
+      markHydrated: () => set({ _hasHydrated: true }),
       setAuth: (accessToken, userId, userName, userRole = 'USER') =>
         set({ accessToken, userId, userName, userRole }),
       setProfile: (profile) => set({ profile }),
@@ -48,7 +50,7 @@ export const useUserStore = create<UserStore>()(
     {
       name: 'welfare-user',
       onRehydrateStorage: () => (state) => {
-        if (state) state._hasHydrated = true;
+        state?.markHydrated();
       },
       partialize: (state) => ({
         accessToken: state.accessToken,

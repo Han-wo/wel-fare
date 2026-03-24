@@ -8,6 +8,7 @@ import * as xml2js from 'xml2js';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { createHash } from 'node:crypto';
 import { getRequiredAnyEnv, getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -24,6 +25,7 @@ const WELFARE_BASE_URL =
   'https://apis.data.go.kr/B554287/NationalWelfareInformationsV001';
 const PAGE_SIZE = 100;
 const EMBED_BATCH = 20; // 한 번에 임베딩할 정책 수
+const QDRANT_LOOKUP_BATCH = 50;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
@@ -62,6 +64,11 @@ interface PolicyDetail extends PolicyListItem {
 type PreparedPolicy = PreparedSyncItem<PolicyDetail>;
 
 // ── 유틸 ─────────────────────────────────────────────────
+function servIdToPointId(servId: string): string {
+  const hex = createHash('sha1').update(`bokjiro:${servId}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 function cleanText(text?: string): string {
   if (!text) return '';
   return text.replace(/\s+/g, ' ').replace(/\n+/g, '\n').trim();
@@ -84,6 +91,58 @@ function buildPageContent(p: PolicyDetail): string {
   if (p.onapPsbltYn === 'Y') parts.push(`[온라인신청] 가능`);
   parts.push(`[신청링크] https://www.bokjiro.go.kr/ssis-tbu/twataa/wlfareInfo/moveTWAT52011M.do?wlfareInfoId=${p.servId}`);
   return parts.join('\n');
+}
+
+async function removeStaleQdrantPoints(policies: PreparedPolicy[]): Promise<number> {
+  if (policies.length === 0) return 0;
+
+  const desiredPointIds = new Map(
+    policies.map(({ item, policyId }) => [policyId, servIdToPointId(item.servId)]),
+  );
+  const stalePointIds = new Map<string, number | string>();
+  const policyIds = [...desiredPointIds.keys()];
+
+  for (let i = 0; i < policyIds.length; i += QDRANT_LOOKUP_BATCH) {
+    const policyIdBatch = policyIds.slice(i, i + QDRANT_LOOKUP_BATCH);
+    let offset: number | string | undefined;
+
+    while (true) {
+      const response = await qdrant.scroll(COLLECTION, {
+        limit: Math.max(policyIdBatch.length * 4, 100),
+        offset,
+        with_payload: ['policyId', 'source'],
+        with_vector: false,
+        filter: {
+          must: [{ key: 'source', match: { value: 'bokjiro' } }],
+          should: policyIdBatch.map((policyId) => ({
+            key: 'policyId',
+            match: { value: policyId },
+          })),
+        },
+      });
+
+      for (const point of response.points) {
+        const policyId = String(point.payload?.policyId ?? '');
+        const expectedPointId = desiredPointIds.get(policyId);
+        if (!expectedPointId) continue;
+        if (String(point.id) !== expectedPointId) {
+          stalePointIds.set(String(point.id), point.id as number | string);
+        }
+      }
+
+      if (!response.next_page_offset) break;
+      offset = response.next_page_offset as number | string;
+    }
+  }
+
+  if (stalePointIds.size === 0) return 0;
+
+  await qdrant.delete(COLLECTION, {
+    wait: true,
+    points: [...stalePointIds.values()],
+  });
+
+  return stalePointIds.size;
 }
 
 // ── API 호출 ─────────────────────────────────────────────
@@ -171,8 +230,10 @@ function preparePolicies(policies: PolicyDetail[]): PreparedPolicy[] {
 
 // ── Qdrant upsert ────────────────────────────────────────
 async function upsertToQdrant(policies: PreparedPolicy[], embeddings: number[][]): Promise<void> {
+  await removeStaleQdrantPoints(policies);
+
   const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
-    id: Buffer.from(p.servId).reduce((acc, b) => acc * 256 + b, 0) % 2147483647,
+    id: servIdToPointId(p.servId),
     vector: embeddings[i],
     payload: {
       policyId,

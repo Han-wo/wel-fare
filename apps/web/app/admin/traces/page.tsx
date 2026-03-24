@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Activity, Bot, Network, Search } from 'lucide-react';
+import { Activity, Bot, Clock3, Network, Search, Workflow, FileText, ListTree } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { parseServerDate, formatRelativeKoreanTime } from '../../../lib/datetime';
 import { useUserStore } from '../../../store/user.store';
@@ -60,18 +60,23 @@ interface TraceDetail extends TraceSummary {
   };
 }
 
+type TraceView = 'overview' | 'graph' | 'events';
+
 export default function AdminTracesPage() {
   const router = useRouter();
+  const hasHydrated = useUserStore((state) => state._hasHydrated);
   const userRole = useUserStore((state) => state.userRole);
   const accessToken = useUserStore((state) => state.accessToken);
 
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTrace, setSelectedTrace] = useState<TraceDetail | null>(null);
+  const [activeView, setActiveView] = useState<TraceView>('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!hasHydrated) return;
     if (!accessToken) {
       router.replace('/login');
       return;
@@ -79,7 +84,7 @@ export default function AdminTracesPage() {
     if (userRole && userRole !== 'ADMIN') {
       router.replace('/chat');
     }
-  }, [accessToken, userRole, router]);
+  }, [hasHydrated, accessToken, userRole, router]);
 
   const fetchTraces = useCallback(async () => {
     const list = await api<TraceSummary[]>('/admin/traces?limit=30');
@@ -98,6 +103,7 @@ export default function AdminTracesPage() {
 
   useEffect(() => {
     let mounted = true;
+    if (!hasHydrated || !accessToken) return;
 
     (async () => {
       try {
@@ -128,12 +134,16 @@ export default function AdminTracesPage() {
       mounted = false;
       window.clearInterval(timer);
     };
-  }, [fetchDetail, fetchTraces]);
+  }, [hasHydrated, accessToken, fetchDetail, fetchTraces]);
 
   useEffect(() => {
     if (!selectedId) return;
     void fetchDetail(selectedId).catch(() => undefined);
   }, [fetchDetail, selectedId]);
+
+  useEffect(() => {
+    setActiveView('overview');
+  }, [selectedId]);
 
   const decisionEvents = useMemo(
     () => selectedTrace?.events.filter((event) => event.type === 'decision') ?? [],
@@ -147,6 +157,16 @@ export default function AdminTracesPage() {
     () => selectedTrace?.events.filter((event) => event.type === 'graph_walk') ?? [],
     [selectedTrace],
   );
+
+  if (!hasHydrated) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 py-8">
+        <div className="surface rounded-[28px] px-6 py-5 text-sm text-[var(--text-secondary)]">
+          로그인 상태를 확인하는 중입니다.
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -169,41 +189,58 @@ export default function AdminTracesPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="surface hero-grid rounded-[32px] px-7 py-8 md:px-8">
-          <div className="flex flex-col gap-7">
-            <AdminConsoleNav />
+    <div className="h-full overflow-y-auto px-6 py-6">
+      <div className="mx-auto max-w-[1680px] space-y-5">
+        <section className="surface rounded-[30px] px-6 py-5">
+          <AdminConsoleNav />
+          <div className="mt-6 flex flex-wrap items-end justify-between gap-5">
             <div className="max-w-3xl">
               <span className="section-kicker">AI Trace Console</span>
-              <h1 className="display-text mt-5 text-4xl font-semibold text-[var(--text-primary)]">
-                질문별 검색 경로와
+              <h1 className="display-text mt-4 text-3xl font-semibold text-[var(--text-primary)] md:text-[2.65rem]">
+                질문의 판단 근거를
                 <br />
-                그래프 탐색 흐름 추적
+                관심사별로 나눠서 확인
               </h1>
-              <p className="mt-4 text-sm leading-7 text-[var(--text-secondary)]">
-                도구 선택, 벡터 검색 결과, 그래프 노드 확장, 최종 답변 근거를 세션 단위로 확인합니다.
+              <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">
+                같은 trace라도 개요, 그래프, 이벤트를 분리해서 필요한 정보만 볼 수 있습니다.
               </p>
+            </div>
+
+            <div className="grid min-w-[280px] gap-3 sm:grid-cols-3">
+              <OverviewStat
+                icon={Activity}
+                label="최근 trace"
+                value={traces.length.toString()}
+                caption="최근 30개 기준"
+              />
+              <OverviewStat
+                icon={Bot}
+                label="활성 route"
+                value={selectedTrace?.routeType ?? '-'}
+                caption={selectedTrace?.status ?? '선택 없음'}
+              />
+              <OverviewStat
+                icon={Clock3}
+                label="최근 갱신"
+                value={traces[0] ? formatRelativeKoreanTime(traces[0].startedAt) : '-'}
+                caption="자동 새로고침"
+              />
             </div>
           </div>
         </section>
 
-        <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
-          <section className="surface rounded-[28px] p-4">
-            <div className="flex items-center justify-between gap-3 px-2 pb-3">
-              <div>
-                <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--text-muted)]">
-                  최근 추적 로그
-                </h2>
-                <p className="mt-2 text-sm text-[var(--text-secondary)]">
-                  질문 1회당 1개의 추적 로그입니다.
-                </p>
-              </div>
+        <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="surface self-start rounded-[28px] p-4 xl:sticky xl:top-6">
+            <div className="px-2 pb-3">
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">최근 trace</h2>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                질문 단위로 저장된 실행 로그입니다.
+              </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="max-h-[calc(100vh-14rem)] space-y-2 overflow-y-auto pr-1">
               {traces.length === 0 ? (
-                <div className="surface-soft rounded-[24px] px-4 py-5 text-sm text-[var(--text-secondary)]">
+                <div className="surface-soft rounded-[22px] px-4 py-5 text-sm text-[var(--text-secondary)]">
                   아직 저장된 AI 추적 로그가 없습니다.
                 </div>
               ) : (
@@ -212,27 +249,31 @@ export default function AdminTracesPage() {
                     key={trace.id}
                     type="button"
                     onClick={() => setSelectedId(trace.id)}
-                    className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
+                    className={`w-full rounded-[22px] border px-4 py-4 text-left transition ${
                       selectedId === trace.id
-                        ? 'border-[rgba(47,111,91,0.2)] bg-[var(--brand-soft)]'
-                        : 'border-transparent bg-white/60 hover:border-[var(--panel-border)] hover:bg-white/84'
+                        ? 'border-[rgba(47,111,91,0.2)] bg-[var(--brand-soft)] shadow-[0_14px_30px_rgba(20,31,45,0.08)]'
+                        : 'border-[var(--panel-border)] bg-white/70 hover:bg-white/86'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-between gap-3">
                       <StatusBadge status={trace.status} />
                       <span className="text-xs text-[var(--text-muted)]">
                         {formatRelativeKoreanTime(trace.startedAt)}
                       </span>
                     </div>
-                    <p className="mt-3 line-clamp-2 text-sm font-semibold text-[var(--text-primary)]">
+
+                    <p className="mt-3 line-clamp-2 text-sm font-semibold leading-6 text-[var(--text-primary)]">
                       {trace.question}
                     </p>
-                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                      {trace.summary ?? '요약 정보 없음'}
-                    </p>
+
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {trace.toolNames.slice(0, 3).map((toolName) => (
-                        <span key={toolName} className="badge-soft text-[11px]">
+                      {trace.routeType ? (
+                        <span className="badge-soft !px-2.5 !py-1 !text-[11px] uppercase">
+                          {trace.routeType}
+                        </span>
+                      ) : null}
+                      {trace.toolNames.slice(0, 2).map((toolName) => (
+                        <span key={toolName} className="badge-soft !px-2.5 !py-1 !text-[11px]">
                           {toolName}
                         </span>
                       ))}
@@ -241,152 +282,204 @@ export default function AdminTracesPage() {
                 ))
               )}
             </div>
-          </section>
+          </aside>
 
-          <section className="space-y-6">
+          <section className="space-y-5">
             {selectedTrace ? (
               <>
-                <div className="grid gap-4 md:grid-cols-3">
-                  <TraceStatCard
-                    icon={Bot}
-                    title="선택된 도구"
-                    value={selectedTrace.toolNames.length.toString()}
-                    sub={selectedTrace.routeType ? `${selectedTrace.routeType} 경로` : '도구 선택 없음'}
-                  />
-                  <TraceStatCard
-                    icon={Search}
-                    title="벡터 검색 단계"
-                    value={vectorEvents.length.toString()}
-                    sub={selectedTrace.model ?? '모델 정보 없음'}
-                  />
-                  <TraceStatCard
-                    icon={Network}
-                    title="그래프 확장 단계"
-                    value={graphEvents.length.toString()}
-                    sub={`${selectedTrace.graph.nodes.length} 노드 · ${selectedTrace.graph.edges.length} 엣지`}
-                  />
-                </div>
-
-                <div className="surface rounded-[28px] p-6">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
+                <section className="surface rounded-[28px] p-6">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="max-w-4xl">
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusBadge status={selectedTrace.status} />
-                        <span className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                          {selectedTrace.routeType ?? 'UNSPECIFIED'}
+                        {selectedTrace.routeType ? (
+                          <span className="badge-soft !px-2.5 !py-1 !text-[11px] uppercase">
+                            {selectedTrace.routeType}
+                          </span>
+                        ) : null}
+                        <span className="text-xs text-[var(--text-muted)]">
+                          {formatTimestamp(selectedTrace.startedAt)}
+                          {selectedTrace.durationMs
+                            ? ` · ${formatDuration(selectedTrace.durationMs)}`
+                            : ''}
                         </span>
                       </div>
-                      <h2 className="mt-4 text-2xl font-semibold text-[var(--text-primary)]">
+
+                      <h2 className="mt-4 text-2xl font-semibold leading-[1.3] text-[var(--text-primary)] md:text-[2rem]">
                         {selectedTrace.question}
                       </h2>
-                      <p className="mt-3 text-sm text-[var(--text-secondary)]">
-                        {formatTimestamp(selectedTrace.startedAt)}
-                        {selectedTrace.durationMs ? ` · ${formatDuration(selectedTrace.durationMs)}` : ''}
+
+                      <p className="mt-4 max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">
+                        {selectedTrace.summary ?? '요약 정보가 아직 없습니다.'}
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
-                      {selectedTrace.toolNames.map((toolName) => (
-                        <span key={toolName} className="badge-soft">
-                          {toolName}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-                    <div className="surface-soft rounded-[24px] p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                        요약
-                      </p>
-                      <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">
-                        {selectedTrace.summary ?? '요약 정보 없음'}
-                      </p>
-                      {selectedTrace.error ? (
-                        <p className="mt-4 text-sm leading-7 text-rose-700">{selectedTrace.error}</p>
-                      ) : null}
-                    </div>
-
-                    <div className="surface-soft rounded-[24px] p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                        최종 답변
-                      </p>
-                      <div className="mt-3 text-sm leading-7 text-[var(--text-primary)]">
-                        <MarkdownMessage content={selectedTrace.answer ?? '저장된 답변이 없습니다.'} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-                  <section className="surface rounded-[28px] p-6">
-                    <div className="flex items-center gap-2">
-                      <Activity size={16} className="text-[var(--brand-strong)]" />
-                      <h2 className="text-sm font-semibold text-[var(--text-primary)]">판단 근거</h2>
-                    </div>
-                    <div className="mt-5 space-y-5">
-                      <TraceSection title="도구 선택" items={decisionEvents} />
-                      <TraceSection title="벡터 검색" items={vectorEvents} />
-                      <TraceSection title="그래프 확장" items={graphEvents} />
-                    </div>
-                  </section>
-
-                  <section className="surface rounded-[28px] p-6">
-                    <div className="flex items-center gap-2">
-                      <Network size={16} className="text-[var(--brand-strong)]" />
-                      <h2 className="text-sm font-semibold text-[var(--text-primary)]">그래프 시각화</h2>
-                    </div>
-                    <p className="mt-3 text-sm text-[var(--text-secondary)]">
-                      질문에서 라우트가 어떻게 잡혔고, 어떤 도구와 검색 결과를 거쳐 그래프 탐색으로
-                      이어졌는지 단계별로 확인합니다. 노드를 클릭하면 들어온 경로와 다음 경로를
-                      분리해서 볼 수 있습니다.
-                    </p>
-                    <div className="mt-5">
-                      <AdminTraceGraph
-                        graph={selectedTrace.graph}
-                        routeType={selectedTrace.routeType}
-                        toolNames={selectedTrace.toolNames}
+                    <div className="grid min-w-[260px] gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                      <DetailStat
+                        icon={Bot}
+                        label="도구"
+                        value={selectedTrace.toolNames.length.toString()}
+                        caption={selectedTrace.model ?? '모델 정보 없음'}
+                      />
+                      <DetailStat
+                        icon={Search}
+                        label="벡터 단계"
+                        value={vectorEvents.length.toString()}
+                        caption="retrieval"
+                      />
+                      <DetailStat
+                        icon={Network}
+                        label="그래프 단계"
+                        value={graphEvents.length.toString()}
+                        caption={`${selectedTrace.graph.nodes.length} 노드`}
                       />
                     </div>
-                  </section>
-                </div>
+                  </div>
+                  <div className="mt-6 flex flex-wrap gap-2">
+                    <TraceViewButton
+                      icon={FileText}
+                      label="개요"
+                      active={activeView === 'overview'}
+                      onClick={() => setActiveView('overview')}
+                    />
+                    <TraceViewButton
+                      icon={Workflow}
+                      label="그래프"
+                      active={activeView === 'graph'}
+                      onClick={() => setActiveView('graph')}
+                    />
+                    <TraceViewButton
+                      icon={ListTree}
+                      label="이벤트"
+                      active={activeView === 'events'}
+                      onClick={() => setActiveView('events')}
+                    />
+                  </div>
 
-                <section className="surface rounded-[28px] p-6">
-                  <h2 className="text-sm font-semibold text-[var(--text-primary)]">이벤트 타임라인</h2>
-                  <div className="mt-5 space-y-3">
-                    {selectedTrace.events.map((event) => (
-                      <div
-                        key={event.id}
-                        className="rounded-[22px] border border-[var(--panel-border)] bg-white/70 px-4 py-4"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-[var(--text-primary)]">{event.title}</p>
-                            {event.detail ? (
-                              <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                                {event.detail}
-                              </p>
-                            ) : null}
+                  {activeView === 'overview' ? (
+                    <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(320px,0.85fr)]">
+                      <div className="surface-soft rounded-[24px] p-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                          최종 답변
+                        </p>
+                        <div className="prose-chat mt-3 text-sm leading-7 text-[var(--text-primary)]">
+                          <MarkdownMessage content={selectedTrace.answer ?? '저장된 답변이 없습니다.'} />
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="surface-soft rounded-[24px] p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                            사용한 도구
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {selectedTrace.toolNames.length > 0 ? (
+                              selectedTrace.toolNames.map((toolName) => (
+                                <span key={toolName} className="badge-soft">
+                                  {toolName}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-sm text-[var(--text-secondary)]">기록된 도구가 없습니다.</span>
+                            )}
                           </div>
-                          <span className="text-xs text-[var(--text-muted)]">
-                            {formatEventTime(event.at)}
-                          </span>
                         </div>
 
-                        {event.payload ? (
-                          <details className="mt-4 rounded-[18px] bg-[rgba(19,32,51,0.04)] px-4 py-3">
-                            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                              Raw Payload
-                            </summary>
-                            <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)]">
-                              {JSON.stringify(event.payload, null, 2)}
-                            </pre>
-                          </details>
+                        <div className="surface-soft rounded-[24px] p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                            핵심 단계 요약
+                          </p>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                            <MiniMetric label="판단" value={`${decisionEvents.length}`} />
+                            <MiniMetric label="벡터" value={`${vectorEvents.length}`} />
+                            <MiniMetric label="그래프" value={`${graphEvents.length}`} />
+                          </div>
+                        </div>
+
+                        {selectedTrace.error ? (
+                          <div className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">
+                            {selectedTrace.error}
+                          </div>
                         ) : null}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ) : null}
                 </section>
+
+                {activeView === 'graph' ? (
+                  <section className="surface rounded-[28px] p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+                          그래프 탐색 시각화
+                        </h2>
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                          질문, 라우팅, 도구, 검색 결과, 그래프 확장 흐름만 집중해서 봅니다.
+                        </p>
+                      </div>
+                    </div>
+                    <AdminTraceGraph
+                      graph={selectedTrace.graph}
+                      routeType={selectedTrace.routeType}
+                      toolNames={selectedTrace.toolNames}
+                    />
+                  </section>
+                ) : null}
+
+                {activeView === 'events' ? (
+                  <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+                    <section className="surface rounded-[28px] p-5">
+                      <div className="flex items-center gap-2">
+                        <Activity size={16} className="text-[var(--brand-strong)]" />
+                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">판단 단계</h2>
+                      </div>
+                      <div className="mt-5 space-y-5">
+                        <TraceSection title="도구 선택" items={decisionEvents} />
+                        <TraceSection title="벡터 검색" items={vectorEvents} />
+                        <TraceSection title="그래프 확장" items={graphEvents} />
+                      </div>
+                    </section>
+
+                    <section className="surface rounded-[28px] p-5">
+                      <h2 className="text-sm font-semibold text-[var(--text-primary)]">이벤트 타임라인</h2>
+                      <div className="mt-5 max-h-[620px] space-y-3 overflow-y-auto pr-1">
+                        {selectedTrace.events.map((event) => (
+                          <div
+                            key={event.id}
+                            className="rounded-[22px] border border-[var(--panel-border)] bg-white/70 px-4 py-4"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-[var(--text-primary)]">
+                                  {event.title}
+                                </p>
+                                {event.detail ? (
+                                  <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+                                    {event.detail}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <span className="text-xs text-[var(--text-muted)]">
+                                {formatEventTime(event.at)}
+                              </span>
+                            </div>
+
+                            {event.payload ? (
+                              <details className="mt-4 rounded-[18px] bg-[rgba(19,32,51,0.04)] px-4 py-3">
+                                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                                  Raw Payload
+                                </summary>
+                                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-[var(--text-secondary)]">
+                                  {JSON.stringify(event.payload, null, 2)}
+                                </pre>
+                              </details>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  </div>
+                ) : null}
               </>
             ) : (
               <div className="surface rounded-[28px] px-6 py-10 text-sm text-[var(--text-secondary)]">
@@ -396,6 +489,44 @@ export default function AdminTracesPage() {
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TraceViewButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: typeof FileText;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition ${
+        active
+          ? 'bg-[var(--brand-strong)] text-white shadow-[0_12px_24px_rgba(47,111,91,0.18)]'
+          : 'border border-[var(--panel-border)] bg-white/76 text-[var(--text-secondary)] hover:bg-white hover:text-[var(--text-primary)]'
+      }`}
+    >
+      <Icon size={15} />
+      {label}
+    </button>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[18px] border border-[var(--panel-border)] bg-white/76 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-semibold text-[var(--text-primary)]">{value}</p>
     </div>
   );
 }
@@ -430,29 +561,56 @@ function TraceSection({ title, items }: { title: string; items: TraceEvent[] }) 
   );
 }
 
-function TraceStatCard({
+function OverviewStat({
   icon: Icon,
-  title,
+  label,
   value,
-  sub,
+  caption,
 }: {
   icon: typeof Bot;
-  title: string;
+  label: string;
   value: string;
-  sub: string;
+  caption: string;
 }) {
   return (
-    <div className="surface rounded-[28px] p-5">
+    <div className="rounded-[22px] border border-[var(--panel-border)] bg-white/72 px-4 py-4">
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand-soft)] text-[var(--brand-strong)]">
           <Icon size={18} />
         </div>
         <div>
-          <p className="text-sm text-[var(--text-secondary)]">{title}</p>
+          <p className="text-xs uppercase tracking-[0.14em] text-[var(--text-muted)]">{label}</p>
+          <p className="mt-1 text-lg font-semibold text-[var(--text-primary)]">{value}</p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-[var(--text-secondary)]">{caption}</p>
+    </div>
+  );
+}
+
+function DetailStat({
+  icon: Icon,
+  label,
+  value,
+  caption,
+}: {
+  icon: typeof Bot;
+  label: string;
+  value: string;
+  caption: string;
+}) {
+  return (
+    <div className="rounded-[22px] border border-[var(--panel-border)] bg-white/72 px-4 py-4">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--brand-soft)] text-[var(--brand-strong)]">
+          <Icon size={18} />
+        </div>
+        <div>
+          <p className="text-sm text-[var(--text-secondary)]">{label}</p>
           <p className="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{value}</p>
         </div>
       </div>
-      <p className="mt-4 text-sm text-[var(--text-muted)]">{sub}</p>
+      <p className="mt-3 text-sm text-[var(--text-muted)]">{caption}</p>
     </div>
   );
 }

@@ -16,8 +16,10 @@ import { CrawlerModule } from './modules/crawler/crawler.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { BookmarksModule } from './modules/bookmarks/bookmarks.module';
 import { DataSyncModule } from './modules/data-sync/data-sync.module';
+import { HealthController } from './health.controller';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
 

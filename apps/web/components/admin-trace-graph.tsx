@@ -1,15 +1,16 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Background,
   Controls,
   Handle,
   MarkerType,
-  MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeProps,
@@ -56,6 +57,7 @@ type TraceFlowData = {
   score?: number | null;
   color: string;
   highlighted: boolean;
+  faded: boolean;
   iconKey: TracePhaseId | 'document';
 };
 
@@ -72,11 +74,23 @@ type KindMeta = {
   iconKey: TraceFlowData['iconKey'];
 };
 
+const CANVAS_HEIGHT = 640;
+const CANVAS_SIDE_PADDING = 40;
+const COLUMN_GAP = 72;
+const PHASE_NODE_WIDTH: Record<TracePhaseId, number> = {
+  question: 290,
+  route: 252,
+  profile: 260,
+  tool: 260,
+  retrieval: 320,
+  graph: 260,
+};
+
 const PHASES: PhaseSummary[] = [
   { id: 'question', label: '질문', description: '사용자 입력' },
-  { id: 'route', label: '라우팅', description: '의도 분류' },
+  { id: 'route', label: '라우팅', description: '의도 결정' },
   { id: 'profile', label: '프로필', description: '사용자 맥락' },
-  { id: 'tool', label: '도구 선택', description: '검색/판정 도구' },
+  { id: 'tool', label: '도구', description: '검색/판정 호출' },
   { id: 'retrieval', label: '검색 결과', description: '벡터·문서 후보' },
   { id: 'graph', label: '그래프 탐색', description: '확장 노드/관계' },
 ];
@@ -233,108 +247,137 @@ function TraceGraphCanvas({
     [activeNodeId, graph.edges],
   );
 
-  const phaseSummary = useMemo(
-    () =>
-      PHASES.map((phase) => ({
-        ...phase,
-        count: graph.nodes.filter((node) => resolveKindMeta(node.kind).phase === phase.id).length,
-      })),
-    [graph.nodes],
-  );
-
   const flowGraph = useMemo(
     () => buildFlowGraph(graph, activeNodeId),
     [activeNodeId, graph],
   );
+  const nodesInitialized = useNodesInitialized();
+  const reactFlow = useReactFlow();
+
+  useEffect(() => {
+    if (!nodesInitialized || flowGraph.nodes.length === 0) return;
+
+    const raf = window.requestAnimationFrame(() => {
+      void reactFlow.fitView({
+        padding: 0.18,
+        duration: 260,
+        minZoom: 0.48,
+        maxZoom: 0.94,
+      });
+    });
+
+    return () => window.cancelAnimationFrame(raf);
+  }, [nodesInitialized, reactFlow, flowGraph]);
 
   return (
     <div className="space-y-4">
-      <div className="surface-soft rounded-[24px] p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {routeType ? <TracePill label="라우트" value={routeType} /> : null}
-          {toolNames.slice(0, 4).map((toolName) => (
-            <TracePill key={toolName} label="도구" value={toolName} />
-          ))}
-          <TracePill label="그래프" value={`${graph.nodes.length} 노드 · ${graph.edges.length} 엣지`} />
-        </div>
-        <p className="mt-3 text-sm text-[var(--text-secondary)]">
-          질문에서 어떤 라우트가 선택됐고, 어떤 도구가 검색 결과를 만들고, 이후 어떤 그래프 노드로
-          확장됐는지 단계별로 추적합니다.
-        </p>
+      <div className="flex flex-wrap gap-2">
+        {routeType ? <TracePill label="라우트" value={routeType} /> : null}
+        <TracePill label="노드" value={`${graph.nodes.length}`} />
+        <TracePill label="엣지" value={`${graph.edges.length}`} />
+        {toolNames.slice(0, 4).map((toolName) => (
+          <TracePill key={toolName} label="도구" value={toolName} />
+        ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="overflow-hidden rounded-[24px] border border-[var(--panel-border)] bg-white/78">
-          <div className="grid gap-px border-b border-[var(--panel-border)] bg-[var(--panel-border)] lg:grid-cols-6">
-            {phaseSummary.map((phase) => {
+      <div className="flex flex-wrap gap-2">
+        {PHASES.map((phase) => {
+          const activePhase = selectedNode
+            ? resolveKindMeta(selectedNode.kind).phase === phase.id
+            : false;
+          const count = graph.nodes.filter((node) => resolveKindMeta(node.kind).phase === phase.id).length;
+
+          return (
+            <span
+              key={phase.id}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
+                activePhase
+                  ? 'border-[rgba(47,111,91,0.24)] bg-[var(--brand-soft)] text-[var(--text-primary)]'
+                  : 'border-[var(--panel-border)] bg-white/74 text-[var(--text-secondary)]'
+              }`}
+            >
+              <span className="font-semibold">{phase.label}</span>
+              <span className="text-[var(--text-muted)]">{count}</span>
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="overflow-hidden rounded-[26px] border border-[var(--panel-border)] bg-white/80">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-white/72 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-[var(--text-primary)]">탐색 그래프</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              선택한 노드 중심 경로를 강조하고, 관련 없는 분기는 흐리게 표시합니다.
+            </p>
+          </div>
+
+          {selectedNode ? (
+            <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-white/86 px-3 py-2 text-xs text-[var(--text-secondary)]">
+              <span className="font-semibold text-[var(--text-primary)]">
+                {truncate(selectedNode.label, 48)}
+              </span>
+              <span className="uppercase text-[var(--text-muted)]">
+                {resolveKindMeta(selectedNode.kind).label}
+              </span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="relative h-[640px] bg-[radial-gradient(circle_at_top_left,rgba(47,111,91,0.08),transparent_24%),linear-gradient(180deg,rgba(255,255,252,0.9),rgba(247,242,234,0.94))]">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] grid grid-cols-6 gap-3 px-6 py-4">
+            {PHASES.map((phase) => {
               const activePhase = selectedNode
                 ? resolveKindMeta(selectedNode.kind).phase === phase.id
                 : false;
+
               return (
                 <div
                   key={phase.id}
-                  className={`bg-white/88 px-4 py-4 transition ${
-                    activePhase ? 'bg-[var(--brand-soft)]' : ''
+                  className={`rounded-full border px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
+                    activePhase
+                      ? 'border-[rgba(47,111,91,0.22)] bg-[var(--brand-soft)] text-[var(--text-primary)]'
+                      : 'border-[rgba(82,99,121,0.12)] bg-white/70 text-[var(--text-muted)]'
                   }`}
                 >
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                    {phase.label}
-                  </p>
-                  <div className="mt-2 flex items-end justify-between gap-2">
-                    <p className="text-lg font-semibold text-[var(--text-primary)]">{phase.count}</p>
-                    <p className="text-xs text-[var(--text-secondary)]">{phase.description}</p>
-                  </div>
+                  {phase.label}
                 </div>
               );
             })}
           </div>
 
-          <div className="h-[560px] bg-[radial-gradient(circle_at_top_left,rgba(47,111,91,0.08),transparent_26%),linear-gradient(180deg,rgba(255,255,252,0.88),rgba(247,242,234,0.94))]">
-            <ReactFlow
-              nodes={flowGraph.nodes}
-              edges={flowGraph.edges}
-              nodeTypes={nodeTypes}
-              fitView
-              fitViewOptions={{ padding: 0.18, maxZoom: 1.05 }}
-              proOptions={{ hideAttribution: true }}
-              nodesDraggable={false}
-              nodesConnectable={false}
-              elementsSelectable
-              minZoom={0.35}
-              maxZoom={1.6}
-              onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            >
-              <Background color="rgba(124, 138, 157, 0.12)" gap={28} size={1} />
-              <MiniMap
-                pannable
-                zoomable
-                nodeStrokeColor={(node) => {
-                  const color = (node.data as TraceFlowData | undefined)?.color;
-                  return color ?? '#8896a8';
-                }}
-                nodeColor={(node) => {
-                  const data = node.data as TraceFlowData | undefined;
-                  return `${data?.color ?? '#8896a8'}22`;
-                }}
-                maskColor="rgba(244, 239, 230, 0.7)"
-                className="!rounded-2xl !border !border-[var(--panel-border)] !bg-white/92"
-              />
-              <Controls
-                showInteractive={false}
-                className="!overflow-hidden !rounded-2xl !border !border-[var(--panel-border)] !bg-white/92"
-              />
-            </ReactFlow>
-          </div>
+          <ReactFlow
+            nodes={flowGraph.nodes}
+            edges={flowGraph.edges}
+            nodeTypes={nodeTypes}
+            proOptions={{ hideAttribution: true }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable
+            minZoom={0.45}
+            maxZoom={1.6}
+            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          >
+            <Background color="rgba(124, 138, 157, 0.12)" gap={30} size={1} />
+            <Controls
+              showInteractive={false}
+              className="!overflow-hidden !rounded-2xl !border !border-[var(--panel-border)] !bg-white/92"
+            />
+          </ReactFlow>
         </div>
+      </div>
 
-        <aside className="surface-soft rounded-[24px] p-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <section className="surface-soft rounded-[24px] p-4">
           {selectedNode ? (
-            <div className="space-y-5">
+            <div className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                   선택된 노드
                 </p>
-                <p className="mt-3 text-lg font-semibold text-[var(--text-primary)]">{selectedNode.label}</p>
+                <p className="mt-3 text-xl font-semibold leading-8 text-[var(--text-primary)]">
+                  {selectedNode.label}
+                </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <span className="badge-soft !text-[11px] uppercase">
                     {resolveKindMeta(selectedNode.kind).label}
@@ -348,25 +391,11 @@ function TraceGraphCanvas({
                 </div>
               </div>
 
-              <TraceEdgeGroup
-                title="들어온 경로"
-                edges={incomingEdges}
-                emptyText="이 노드로 들어오는 경로가 없습니다."
-                nodeLookup={nodeLookup}
-              />
-
-              <TraceEdgeGroup
-                title="다음 경로"
-                edges={outgoingEdges}
-                emptyText="이 노드에서 이어지는 다음 경로가 없습니다."
-                nodeLookup={nodeLookup}
-              />
-
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                   메타데이터
                 </p>
-                <pre className="mt-3 overflow-x-auto rounded-[18px] bg-[rgba(19,32,51,0.04)] px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]">
+                <pre className="mt-3 max-h-[280px] overflow-auto rounded-[18px] bg-[rgba(19,32,51,0.04)] px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]">
                   {formatJson(selectedNode.meta)}
                 </pre>
               </div>
@@ -374,7 +403,24 @@ function TraceGraphCanvas({
           ) : (
             <div className="text-sm text-[var(--text-secondary)]">선택된 노드가 없습니다.</div>
           )}
-        </aside>
+        </section>
+
+        <section className="surface-soft rounded-[24px] p-4">
+          <div className="space-y-5">
+            <TraceEdgeGroup
+              title="들어온 경로"
+              edges={incomingEdges}
+              emptyText="이 노드로 들어오는 경로가 없습니다."
+              nodeLookup={nodeLookup}
+            />
+            <TraceEdgeGroup
+              title="다음 경로"
+              edges={outgoingEdges}
+              emptyText="이 노드에서 이어지는 다음 경로가 없습니다."
+              nodeLookup={nodeLookup}
+            />
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -386,9 +432,10 @@ function TraceFlowNode({ data, selected }: NodeProps<Node<TraceFlowData>>) {
 
   return (
     <div
-      className="min-w-[220px] rounded-[22px] border bg-white/94 px-4 py-3 shadow-[0_10px_22px_rgba(20,31,45,0.08)] backdrop-blur"
+      className="w-full rounded-[20px] border bg-white/94 px-4 py-3 shadow-[0_12px_24px_rgba(20,31,45,0.08)] backdrop-blur transition"
       style={{
         borderColor: selected ? color : data.highlighted ? `${color}99` : `${color}55`,
+        opacity: data.faded ? 0.38 : 1,
         boxShadow: selected
           ? `0 0 0 2px ${color}24, 0 18px 32px rgba(20, 31, 45, 0.14)`
           : data.highlighted
@@ -428,7 +475,7 @@ function TraceFlowNode({ data, selected }: NodeProps<Node<TraceFlowData>>) {
         ) : null}
       </div>
 
-      <p className="mt-3 text-sm font-semibold leading-6 text-[var(--text-primary)]">{data.label}</p>
+      <p className="mt-3 text-[13px] font-semibold leading-6 text-[var(--text-primary)]">{data.label}</p>
     </div>
   );
 }
@@ -471,9 +518,9 @@ function TraceEdgeGroup({
                   {formatEdgeLabel(edge.label)}
                 </p>
                 <p className="mt-2 flex items-center gap-2 text-sm leading-6 text-[var(--text-secondary)]">
-                  <span className="truncate">{truncate(sourceLabel, 32)}</span>
+                  <span className="truncate">{truncate(sourceLabel, 40)}</span>
                   <ArrowRight size={14} className="shrink-0 text-[var(--text-muted)]" />
-                  <span className="truncate">{truncate(targetLabel, 32)}</span>
+                  <span className="truncate">{truncate(targetLabel, 40)}</span>
                 </p>
               </div>
             );
@@ -488,7 +535,9 @@ function TraceEdgeGroup({
 
 function buildFlowGraph(graph: TraceGraph, activeNodeId: string | null) {
   const groups = new Map<TracePhaseId, TraceNode[]>();
-  const highlightedNodeIds = activeNodeId ? collectHighlightedNodes(graph.edges, activeNodeId) : new Set<string>();
+  const highlightedNodeIds = activeNodeId
+    ? collectHighlightedNodes(graph.edges, activeNodeId)
+    : new Set<string>();
   const highlightedEdgeIds = activeNodeId
     ? collectHighlightedEdges(graph.edges, highlightedNodeIds)
     : new Set<string>();
@@ -501,42 +550,51 @@ function buildFlowGraph(graph: TraceGraph, activeNodeId: string | null) {
   }
 
   const nodes: Node<TraceFlowData>[] = [];
+  let currentX = CANVAS_SIDE_PADDING;
 
-  PHASES.forEach((phase, columnIndex) => {
+  PHASES.forEach((phase) => {
     const bucket = (groups.get(phase.id) ?? []).toSorted(compareTraceNodes);
-    const rowGap = phase.id === 'question' || phase.id === 'route' ? 138 : 118;
+    const rowGap = phase.id === 'question' || phase.id === 'route' ? 146 : 138;
     const columnHeight = Math.max(bucket.length * rowGap, 148);
-    const offsetY = Math.max((560 - columnHeight) / 2, 32);
+    const offsetY = Math.max((CANVAS_HEIGHT - columnHeight) / 2, 76);
+    const nodeWidth = PHASE_NODE_WIDTH[phase.id];
 
     bucket.forEach((node, rowIndex) => {
       const meta = resolveKindMeta(node.kind);
+      const highlighted = highlightedNodeIds.has(node.id);
       nodes.push({
         id: node.id,
         type: 'traceNode',
         position: {
-          x: 40 + columnIndex * 280,
+          x: currentX,
           y: offsetY + rowIndex * rowGap,
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
         draggable: false,
         selectable: true,
+        style: { width: nodeWidth },
         data: {
           label: truncate(node.label, 56),
           kindLabel: meta.label,
           rawKind: node.kind,
           score: node.score ?? null,
           color: meta.color,
-          highlighted: highlightedNodeIds.has(node.id),
+          highlighted,
+          faded: activeNodeId !== null && !highlighted,
           iconKey: meta.iconKey,
         },
-        zIndex: activeNodeId === node.id ? 3 : highlightedNodeIds.has(node.id) ? 2 : 1,
+        zIndex: activeNodeId === node.id ? 3 : highlighted ? 2 : 1,
       });
     });
+
+    currentX += nodeWidth + COLUMN_GAP;
   });
 
   const edges: Edge[] = graph.edges.map((edge) => {
     const highlighted = highlightedEdgeIds.has(edge.id);
+    const adjacentToActive =
+      activeNodeId != null && (edge.source === activeNodeId || edge.target === activeNodeId);
 
     return {
       id: edge.id,
@@ -549,20 +607,25 @@ function buildFlowGraph(graph: TraceGraph, activeNodeId: string | null) {
         height: 18,
         color: highlighted ? '#2f6f5b' : 'rgba(82,99,121,0.32)',
       },
-      label: truncate(formatEdgeLabel(edge.label), 18),
-      labelStyle: {
-        fill: highlighted ? 'var(--text-primary)' : 'var(--text-muted)',
-        fontSize: 10,
-        fontWeight: 600,
-      },
-      labelBgStyle: {
-        fill: 'rgba(255,255,252,0.9)',
-        fillOpacity: 1,
-      },
-      labelBgPadding: [6, 3],
+      label: highlighted && adjacentToActive ? truncate(formatEdgeLabel(edge.label), 18) : undefined,
+      labelStyle: highlighted
+        ? {
+            fill: 'var(--text-primary)',
+            fontSize: 10,
+            fontWeight: 600,
+          }
+        : undefined,
+      labelBgStyle: highlighted
+        ? {
+            fill: 'rgba(255,255,252,0.92)',
+            fillOpacity: 1,
+          }
+        : undefined,
+      labelBgPadding: highlighted ? [6, 3] : undefined,
       style: {
-        stroke: highlighted ? 'rgba(47,111,91,0.72)' : 'rgba(82,99,121,0.24)',
-        strokeWidth: highlighted ? 2.1 : 1.2,
+        stroke: highlighted ? 'rgba(47,111,91,0.74)' : 'rgba(82,99,121,0.12)',
+        strokeWidth: highlighted ? 2.2 : 1,
+        strokeDasharray: highlighted ? undefined : '4 7',
       },
       animated: highlighted,
       selectable: false,
@@ -586,6 +649,7 @@ function collectHighlightedNodes(edges: TraceEdge[], activeNodeId: string) {
       }
       if (edge.source === current && !nodes.has(edge.target)) {
         nodes.add(edge.target);
+        stack.push(edge.target);
       }
     }
   }
@@ -626,7 +690,7 @@ function formatEdgeLabel(value: string) {
     USES_PROFILE: '프로필 사용',
     PRE_ROUTE: '프리라우팅',
     AGENT: '에이전트 호출',
-    VECTOR_HIT: '벡터 검색 히트',
+    VECTOR_HIT: '벡터 검색',
   };
 
   return labelMap[value] ?? value.replace(/_/g, ' ');

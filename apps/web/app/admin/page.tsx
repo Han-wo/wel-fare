@@ -66,6 +66,7 @@ const NODE_LABELS: Record<string, string> = {
 
 export default function AdminPage() {
   const router = useRouter();
+  const hasHydrated = useUserStore((s) => s._hasHydrated);
   const userRole = useUserStore((s) => s.userRole);
   const accessToken = useUserStore((s) => s.accessToken);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -75,6 +76,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!hasHydrated) return;
     if (!accessToken) {
       router.replace('/login');
       return;
@@ -82,7 +84,7 @@ export default function AdminPage() {
     if (userRole && userRole !== 'ADMIN') {
       router.replace('/chat');
     }
-  }, [accessToken, userRole, router]);
+  }, [hasHydrated, accessToken, userRole, router]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -101,12 +103,13 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
+    if (!hasHydrated || !accessToken) return;
     void fetchStats();
     const timer = window.setInterval(() => {
       void fetchStats();
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [fetchStats]);
+  }, [hasHydrated, accessToken, fetchStats]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -117,6 +120,16 @@ export default function AdminPage() {
       setSyncing(false);
     }
   };
+
+  if (!hasHydrated) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 py-8">
+        <div className="surface rounded-[28px] px-6 py-5 text-sm text-[var(--text-secondary)]">
+          로그인 상태를 확인하는 중입니다.
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

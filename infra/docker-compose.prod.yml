@@ -1,8 +1,6 @@
-version: '3.9'
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Production stack
-#   docker compose -f infra/docker-compose.prod.yml up -d --build
+#   docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml up -d --build
 #
 # Required env file: infra/.env.prod  (copy from infra/.env.prod.example)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,7 +99,7 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
+      NEO4J_USERNAME: neo4j
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: welfare_policies
@@ -110,6 +108,7 @@ services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5-mini}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       LANGCHAIN_TRACING_V2: ${LANGCHAIN_TRACING_V2:-false}
@@ -153,6 +152,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_APP_URL: ${WEB_URL:-http://localhost:3000}
+        NEXT_PUBLIC_API_URL: ${API_PUBLIC_URL:-http://localhost:3001}
     container_name: welfare_web
     image: welfare-ai/web:latest
     environment:

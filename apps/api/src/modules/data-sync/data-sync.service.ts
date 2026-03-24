@@ -21,6 +21,7 @@ const execAsync = promisify(exec);
 const SYNC_SEEDS = [
   { key: 'welfare', name: '중앙부처 복지서비스', script: 'welfare-api.seed.ts' },
   { key: 'local-welfare', name: '지자체 복지서비스', script: 'local-welfare.seed.ts' },
+  { key: 'youth-policy', name: '청년정책', script: 'youth-policy.seed.ts' },
   { key: 'rental-housing', name: '공공임대주택 단지', script: 'rental-housing.seed.ts' },
   { key: 'facility', name: '사회복지시설', script: 'welfare-facility.seed.ts' },
   { key: 'housing-announcement', name: '공공주택 모집공고', script: 'housing-announcement.seed.ts' },

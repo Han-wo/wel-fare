@@ -26,6 +26,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Pass public env vars available at build time as build args
 # (runtime-only vars like API_URL are set via docker-compose env)
 ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
+ARG NEXT_PUBLIC_API_URL=http://localhost:3001
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN pnpm --filter @welfare-ai/web exec next build
 
