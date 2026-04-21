@@ -7,7 +7,7 @@ import {
 } from 'typeorm';
 
 export type DataSyncTrigger = 'MANUAL' | 'CRON' | 'SEED';
-export type DataSyncStatus = 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type DataSyncStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
 
 @Entity('data_sync_logs')
 export class DataSyncLog {
@@ -25,6 +25,9 @@ export class DataSyncLog {
 
   @Column()
   script: string;
+
+  @Column({ type: 'integer', default: 0 })
+  orderIndex: number;
 
   @Column()
   trigger: DataSyncTrigger;
@@ -49,6 +52,36 @@ export class DataSyncLog {
 
   @Column({ type: 'integer', nullable: true })
   skippedCount?: number | null;
+
+  @Column({ type: 'varchar', length: 96, nullable: true })
+  phase?: string | null;
+
+  @Column({ type: 'integer', nullable: true })
+  itemTotal?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  fetchCurrent?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  fetchTotal?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  processCurrent?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  processTotal?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  vectorCurrent?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  vectorTotal?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  graphCurrent?: number | null;
+
+  @Column({ type: 'integer', nullable: true })
+  graphTotal?: number | null;
 
   @Column({ type: 'text', nullable: true })
   summary?: string | null;

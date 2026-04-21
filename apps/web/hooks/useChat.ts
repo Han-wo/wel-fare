@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { ChatMessage } from '@welfare-ai/shared-types';
 import { createParser, type ParsedEvent } from 'eventsource-parser';
-import { api } from '../lib/api';
+import { api, fetchWithAuth } from '../lib/api';
 import {
   CHAT_SESSION_CLOSE_REQUESTED,
   emitChatSessionsUpdated,
@@ -151,18 +151,15 @@ export function useChat(sessionId: string) {
       setIsThinking(true);
       emitChatSessionsUpdated();
 
-      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
       const controller = new AbortController();
       abortRef.current = controller;
 
       try {
-        const response = await fetch(
+        const response = await fetchWithAuth(
           `${API_BASE}/api/v1/rag/stream?sessionId=${encodeURIComponent(sessionId)}&q=${encodeURIComponent(trimmed)}`,
           {
             method: 'GET',
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             signal: controller.signal,
-            credentials: 'include',
             cache: 'no-store',
           },
         );

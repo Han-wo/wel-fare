@@ -19,7 +19,7 @@ export class DataSyncController {
     const [qdrant, neo4j, sync] = await Promise.all([
       this.dataSyncService.getQdrantStats(),
       this.dataSyncService.getNeo4jStats(),
-      Promise.resolve(this.dataSyncService.getSyncStatus()),
+      this.dataSyncService.getSyncStatus(),
     ]);
     return { qdrant, neo4j, sync };
   }
@@ -39,9 +39,7 @@ export class DataSyncController {
   @Post('sync')
   @ApiOperation({ summary: '데이터 동기화 수동 트리거 (비동기 실행)' })
   triggerSync() {
-    // 논블로킹으로 실행
-    this.dataSyncService.runSync('MANUAL').catch(() => {});
-    return { message: '동기화 시작됨. GET /api/v1/admin/stats 에서 상태 확인 가능' };
+    return this.dataSyncService.startSync('MANUAL');
   }
 
   @Get('sync/logs')
@@ -50,16 +48,33 @@ export class DataSyncController {
     return this.dataSyncService.getRecentLogs(limit);
   }
 
+  @Get('sync/current')
+  @ApiOperation({ summary: '현재 실행 중인 동기화 run 진행도 조회' })
+  getCurrentRun() {
+    return this.dataSyncService.getCurrentRunProgress();
+  }
+
+  @Get('sync/runs/:runId')
+  @ApiOperation({ summary: '특정 동기화 run 진행도 조회' })
+  getRunProgress(@Param('runId') runId: string) {
+    return this.dataSyncService.getRunProgress(runId);
+  }
+
   @Get('sync/sources')
   @ApiOperation({ summary: '동기화 가능한 데이터 소스 목록 조회' })
   getSyncSources() {
     return this.dataSyncService.getSeedCatalog();
   }
 
+  @Get('sync/sources/status')
+  @ApiOperation({ summary: '데이터 소스별 최신 동기화 상태 조회' })
+  getSourceStatuses() {
+    return this.dataSyncService.getSourceStatuses();
+  }
+
   @Post('sync/seeds/:key')
   @ApiOperation({ summary: '개별 시드 동기화 수동 트리거 (비동기 실행)' })
   triggerSeed(@Param('key') key: string) {
-    this.dataSyncService.runSeed(key, 'SEED').catch(() => {});
-    return { message: `${key} 시드 동기화 시작됨. GET /api/v1/admin/sync/logs 에서 상태 확인 가능` };
+    return this.dataSyncService.startSeed(key, 'SEED');
   }
 }

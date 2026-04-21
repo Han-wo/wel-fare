@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
 import { MessageSquare, User, LogOut, ChevronLeft, Plus, Shield, Trash2 } from 'lucide-react';
 import { useUserStore } from '../../store/user.store';
-import { api } from '../../lib/api';
+import { api, logoutRequest } from '../../lib/api';
 import {
   CHAT_SESSIONS_UPDATED,
   emitChatSessionCloseRequested,
@@ -91,10 +91,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     [pathname, router],
   );
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    await logoutRequest();
     clearAuth();
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
     router.push('/');
   }, [clearAuth, router]);
 

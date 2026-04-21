@@ -15,9 +15,9 @@ export class PoliciesService {
 
     if (category) qb.andWhere('p.category = :category', { category });
     if (status) qb.andWhere('p.status = :status', { status });
-    if (sidoCode) qb.andWhere(':sidoCode = ANY(p.sido_codes) OR \'ALL\' = ANY(p.sido_codes)', { sidoCode });
+    if (sidoCode) qb.andWhere(':sidoCode = ANY(p.sidoCodes) OR \'ALL\' = ANY(p.sidoCodes)', { sidoCode });
 
-    qb.skip((page - 1) * limit).take(limit).orderBy('p.createdAt', 'DESC');
+    qb.skip((page - 1) * limit).take(limit).orderBy('p.syncedAt', 'DESC').addOrderBy('p.createdAt', 'DESC');
 
     const [items, total] = await qb.getManyAndCount();
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
@@ -34,8 +34,9 @@ export class PoliciesService {
   async search(q: string) {
     return this.policyRepo
       .createQueryBuilder('p')
-      .where('p.name ILIKE :q OR p.summary ILIKE :q OR p.target_summary ILIKE :q', { q: `%${q}%` })
+      .where('p.name ILIKE :q OR p.summary ILIKE :q OR p.targetSummary ILIKE :q', { q: `%${q}%` })
       .andWhere('p.status = :status', { status: 'ACTIVE' })
+      .orderBy('p.syncedAt', 'DESC')
       .limit(30)
       .getMany();
   }

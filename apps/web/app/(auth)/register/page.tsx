@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { api } from '../../../lib/api';
+import { api, persistAccessToken } from '../../../lib/api';
 import { useUserStore } from '../../../store/user.store';
 import { Eye, EyeOff, Loader2, ChevronRight, ChevronLeft, Check, Sparkles } from 'lucide-react';
 
@@ -123,7 +123,7 @@ export default function RegisterPage() {
     const sigunguCode = `${all.sidoCode}000`;
 
     try {
-      const res = await api<{ accessToken: string; refreshToken: string; user: { id: string; name: string; role: string } }>(
+      const res = await api<{ accessToken: string; user: { id: string; name: string; role: string } }>(
         '/auth/register',
         {
           method: 'POST',
@@ -148,8 +148,7 @@ export default function RegisterPage() {
           },
         },
       );
-      localStorage.setItem('accessToken', res.accessToken);
-      localStorage.setItem('refreshToken', res.refreshToken);
+      persistAccessToken(res.accessToken);
       setAuth(res.accessToken, res.user.id, res.user.name, res.user.role);
       setProfile({
         birthDate,

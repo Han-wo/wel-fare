@@ -7,7 +7,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { ArrowLeft, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { api } from '../../../lib/api';
+import { api, persistAccessToken } from '../../../lib/api';
 import { useUserStore } from '../../../store/user.store';
 
 const schema = z.object({
@@ -39,15 +39,13 @@ export default function LoginPage() {
     try {
       const res = await api<{
         accessToken: string;
-        refreshToken: string;
         user: { id: string; name: string; role: string };
       }>('/auth/login', {
         method: 'POST',
         body: data,
       });
 
-      localStorage.setItem('accessToken', res.accessToken);
-      localStorage.setItem('refreshToken', res.refreshToken);
+      persistAccessToken(res.accessToken);
       setAuth(res.accessToken, res.user.id, res.user.name, res.user.role);
       router.push(res.user.role === 'ADMIN' ? '/admin' : '/chat');
     } catch {

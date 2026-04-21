@@ -15,6 +15,11 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import {
+  closePolicySyncDataSource,
+  syncPoliciesToPostgres,
+  type RelationalPolicyUpsertInput,
+} from './policy-relational-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
 const API_KEY = getRequiredAnyEnv([
@@ -72,6 +77,10 @@ function servIdToPointId(servId: string): string {
 function cleanText(text?: string): string {
   if (!text) return '';
   return text.replace(/\s+/g, ' ').replace(/\n+/g, '\n').trim();
+}
+
+function splitValues(value?: string) {
+  return value?.split(',').map((item) => item.trim()).filter(Boolean) ?? [];
 }
 
 function buildPageContent(p: PolicyDetail): string {
@@ -228,6 +237,50 @@ function preparePolicies(policies: PolicyDetail[]): PreparedPolicy[] {
   });
 }
 
+function toRelationalPolicyInput(policy: PolicyDetail): RelationalPolicyUpsertInput {
+  const tags = [
+    ...splitValues(policy.lifeArray),
+    ...splitValues(policy.trgterIndvdlArray),
+    ...splitValues(policy.intrsThemaArray),
+  ];
+
+  const requirements = [
+    policy.tgtrDtlCn
+      ? {
+          reqType: 'TARGET_DETAIL',
+          description: cleanText(policy.tgtrDtlCn),
+        }
+      : null,
+    policy.slctCritCn
+      ? {
+          reqType: 'SELECTION_CRITERIA',
+          description: cleanText(policy.slctCritCn),
+        }
+      : null,
+  ].filter(Boolean) as RelationalPolicyUpsertInput['requirements'];
+
+  return {
+    externalId: `bokjiro:${policy.servId}`,
+    source: 'bokjiro',
+    name: policy.servNm,
+    category: splitValues(policy.intrsThemaArray)[0] ?? '복지서비스',
+    subcategory: splitValues(policy.intrsThemaArray).slice(1).join(' · ') || null,
+    provider: [policy.jurMnofNm, policy.jurOrgNm].filter(Boolean).join(' / ') || null,
+    summary: cleanText(policy.wlfareInfoOutlCn || policy.servDgst),
+    content: buildPageContent(policy),
+    targetSummary: cleanText(policy.tgtrDtlCn || policy.trgterIndvdlArray),
+    benefitType: policy.srvPvsnNm ?? null,
+    status: 'ACTIVE',
+    applyUrl: `https://www.bokjiro.go.kr/ssis-tbu/twataa/wlfareInfo/moveTWAT52011M.do?wlfareInfoId=${policy.servId}`,
+    sidoCodes: ['ALL'],
+    tags,
+    rawData: policy as unknown as Record<string, unknown>,
+    qdrantPointId: servIdToPointId(policy.servId),
+    neo4jNodeId: policy.servId,
+    requirements,
+  };
+}
+
 // ── Qdrant upsert ────────────────────────────────────────
 async function upsertToQdrant(policies: PreparedPolicy[], embeddings: number[][]): Promise<void> {
   await removeStaleQdrantPoints(policies);
@@ -381,23 +434,30 @@ async function main() {
       graphLabel: 'Policy',
     });
     skipped += plan.skippedCount;
+    const relationalBatch = details.map((item) => toRelationalPolicyInput(item));
 
-    if (plan.vectorUpdates.length > 0) {
-      const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
-      const graphUpdateIds = new Set(plan.graphUpdates.map((item) => item.policyId));
-      const graphBatch = plan.vectorUpdates.filter((item) => graphUpdateIds.has(item.policyId));
-      await Promise.all([
-        upsertToQdrant(plan.vectorUpdates, embeddings),
-        graphBatch.length > 0 ? upsertToNeo4j(graphBatch) : Promise.resolve(),
-      ]);
-      vectorUpdated += plan.vectorUpdates.length;
-      graphUpdated += graphBatch.length;
-    }
+    const vectorPromise =
+      plan.vectorUpdates.length > 0
+        ? (async () => {
+            const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
+            await upsertToQdrant(plan.vectorUpdates, embeddings);
+            vectorUpdated += plan.vectorUpdates.length;
+          })()
+        : Promise.resolve();
 
-    if (plan.graphOnlyUpdates.length > 0) {
-      await upsertToNeo4j(plan.graphOnlyUpdates);
-      graphUpdated += plan.graphOnlyUpdates.length;
-    }
+    const graphPromise =
+      plan.graphUpdates.length > 0
+        ? (async () => {
+            await upsertToNeo4j(plan.graphUpdates);
+            graphUpdated += plan.graphUpdates.length;
+          })()
+        : Promise.resolve();
+
+    await Promise.all([
+      vectorPromise,
+      graphPromise,
+      syncPoliciesToPostgres(relationalBatch),
+    ]);
 
     const done = Math.min(i + EMBED_BATCH, allItems.length);
     console.log(`   [${done}/${allItems.length}] 처리 완료`);
@@ -414,5 +474,6 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
+    await closePolicySyncDataSource();
     await neo4jDriver.close();
   });

@@ -108,10 +108,18 @@ export function createRagGraph(services: RagGraphServices) {
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
   });
+  const traceIdSchema = z.string().nullable();
 
   const searchWelfare = tool(
-    async ({ question, userId, traceId }: { question: string; userId: string; traceId?: string }) =>
-      serializeToolPayload(await services.searchWelfare(question, userId, traceId)),
+    async ({
+      question,
+      userId,
+      traceId,
+    }: {
+      question: string;
+      userId: string;
+      traceId: string | null;
+    }) => serializeToolPayload(await services.searchWelfare(question, userId, traceId ?? undefined)),
     {
       name: 'search_welfare',
       description:
@@ -119,28 +127,36 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchYouthPolicy = tool(
-    async ({ question, traceId }: { question: string; traceId?: string }) =>
-      serializeToolPayload(await services.searchYouthPolicies(question, traceId)),
+    async ({ question, traceId }: { question: string; traceId: string | null }) =>
+      serializeToolPayload(await services.searchYouthPolicies(question, traceId ?? undefined)),
     {
       name: 'search_youth_policy',
       description:
         '청년(만 19~34세) 전용 정책을 검색합니다. 청년수당, 청년월세, 청년도약계좌, 청년 취업·창업 지원 등을 찾을 때 사용합니다.',
       schema: z.object({
         question: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchHousingSubscription = tool(
-    async ({ question, userId, traceId }: { question: string; userId: string; traceId?: string }) =>
-      serializeToolPayload(await services.searchHousingSubscriptions(question, userId, traceId)),
+    async ({
+      question,
+      userId,
+      traceId,
+    }: {
+      question: string;
+      userId: string;
+      traceId: string | null;
+    }) =>
+      serializeToolPayload(await services.searchHousingSubscriptions(question, userId, traceId ?? undefined)),
     {
       name: 'search_housing_subscription',
       description:
@@ -148,14 +164,21 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchRentalSupport = tool(
-    async ({ question, userId, traceId }: { question: string; userId: string; traceId?: string }) =>
-      serializeToolPayload(await services.searchRentalSupport(question, userId, traceId)),
+    async ({
+      question,
+      userId,
+      traceId,
+    }: {
+      question: string;
+      userId: string;
+      traceId: string | null;
+    }) => serializeToolPayload(await services.searchRentalSupport(question, userId, traceId ?? undefined)),
     {
       name: 'search_rental_support',
       description:
@@ -163,7 +186,7 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
@@ -178,10 +201,10 @@ export function createRagGraph(services: RagGraphServices) {
       question: string;
       facility_type: string;
       userId: string;
-      traceId?: string;
+      traceId: string | null;
     }) =>
       serializeToolPayload(
-        await services.searchWelfareFacilities(question, facility_type, userId, traceId),
+        await services.searchWelfareFacilities(question, facility_type, userId, traceId ?? undefined),
       ),
     {
       name: 'search_welfare_facility',
@@ -191,7 +214,7 @@ export function createRagGraph(services: RagGraphServices) {
         question: z.string(),
         facility_type: z.string(),
         userId: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
@@ -204,8 +227,8 @@ export function createRagGraph(services: RagGraphServices) {
     }: {
       policy_name: string;
       userId: string;
-      traceId?: string;
-    }) => serializeToolPayload(await services.searchPolicyEligibility(policy_name, userId, traceId)),
+      traceId: string | null;
+    }) => serializeToolPayload(await services.searchPolicyEligibility(policy_name, userId, traceId ?? undefined)),
     {
       name: 'check_policy_eligibility',
       description:
@@ -213,7 +236,7 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         policy_name: z.string(),
         userId: z.string(),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );
@@ -226,8 +249,8 @@ export function createRagGraph(services: RagGraphServices) {
     }: {
       userId: string;
       days_ahead: number;
-      traceId?: string;
-    }) => serializeToolPayload(await services.getUpcomingDeadlines(userId, days_ahead, traceId)),
+      traceId: string | null;
+    }) => serializeToolPayload(await services.getUpcomingDeadlines(userId, days_ahead, traceId ?? undefined)),
     {
       name: 'get_upcoming_deadlines',
       description:
@@ -235,7 +258,7 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         userId: z.string(),
         days_ahead: z.number().int().min(1).max(30).default(14),
-        traceId: z.string().optional(),
+        traceId: traceIdSchema,
       }),
     },
   );

@@ -16,6 +16,11 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import {
+  closePolicySyncDataSource,
+  syncPoliciesToPostgres,
+  type RelationalPolicyUpsertInput,
+} from './policy-relational-sync.util';
 
 // ── 설정 ─────────────────────────────────────────────────
 const YOUTH_API_KEY = getRequiredEnv('YOUTH_CENTER_API_KEY');
@@ -69,6 +74,32 @@ interface YouthPolicy {
 type PreparedYouthPolicy = PreparedSyncItem<YouthPolicy>;
 
 // ── 유틸 ─────────────────────────────────────────────────
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRequestError(error: unknown) {
+  return axios.isAxiosError(error) && ((error.response?.status ?? 0) >= 500 || error.response?.status === 429);
+}
+
+async function withRetry<T>(task: () => Promise<T>, attempts = 4, baseDelayMs = 1000): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableRequestError(error) || attempt === attempts - 1) {
+        throw error;
+      }
+      await sleep(baseDelayMs * (attempt + 1));
+    }
+  }
+
+  throw lastError;
+}
+
 function cleanText(text?: string): string {
   if (!text) return '';
   return text.replace(/\s+/g, ' ').replace(/\n+/g, '\n').trim();
@@ -148,6 +179,24 @@ function extractSidoCodes(zipCd?: string): string[] {
   return [...new Set(codes)];
 }
 
+function extractDateRange(aplyYmd?: string) {
+  if (!aplyYmd) {
+    return {
+      start: null,
+      end: null,
+    };
+  }
+
+  const matches = [...aplyYmd.matchAll(/(\d{4})(\d{2})(\d{2})/g)].map((match) =>
+    `${match[1]}-${match[2]}-${match[3]}`,
+  );
+
+  return {
+    start: matches[0] ?? null,
+    end: matches[1] ?? null,
+  };
+}
+
 async function removeStaleQdrantPoints(policies: PreparedYouthPolicy[]): Promise<number> {
   if (policies.length === 0) return 0;
 
@@ -204,15 +253,17 @@ async function removeStaleQdrantPoints(policies: PreparedYouthPolicy[]): Promise
 async function fetchYouthPolicies(
   pageNum: number,
 ): Promise<{ totalCount: number; list: YouthPolicy[] }> {
-  const { data } = await axios.get(YOUTH_BASE_URL, {
-    params: {
-      apiKeyNm: YOUTH_API_KEY,
-      pageNum,
-      pageSize: PAGE_SIZE,
-      rtnType: 'json',
-    },
-    timeout: 20000,
-  });
+  const { data } = await withRetry(() =>
+    axios.get(YOUTH_BASE_URL, {
+      params: {
+        apiKeyNm: YOUTH_API_KEY,
+        pageNum,
+        pageSize: PAGE_SIZE,
+        rtnType: 'json',
+      },
+      timeout: 20000,
+    }),
+  );
 
   // 실제 응답 구조: { result: { pagging: { totCount }, youthPolicyList: [] } }
   const result = data?.result ?? {};
@@ -250,6 +301,58 @@ function preparePolicies(policies: YouthPolicy[]): PreparedYouthPolicy[] {
       }),
     };
   });
+}
+
+function toRelationalPolicyInput(policy: YouthPolicy): RelationalPolicyUpsertInput {
+  const institution = policy.sprvsnInstCdNm ?? policy.operInstCdNm ?? '청년정책';
+  const ageInfo = buildAgeInfo(policy);
+  const dateRange = extractDateRange(policy.aplyYmd);
+  const minAge = policy.sprtTrgtMinAge ? Number(policy.sprtTrgtMinAge) : null;
+  const maxAge = policy.sprtTrgtMaxAge ? Number(policy.sprtTrgtMaxAge) : null;
+
+  const requirements = [
+    minAge !== null || maxAge !== null
+      ? {
+          reqType: 'AGE',
+          operator: minAge !== null && maxAge !== null ? 'BETWEEN' : minAge !== null ? '>=' : '<=',
+          minValue: minAge,
+          maxValue: maxAge,
+          description: ageInfo,
+        }
+      : null,
+    policy.addAplyQlfcCndCn
+      ? {
+          reqType: 'SELECTION_CRITERIA',
+          description: cleanText(policy.addAplyQlfcCndCn),
+        }
+      : null,
+  ].filter(Boolean) as RelationalPolicyUpsertInput['requirements'];
+
+  return {
+    externalId: `youth_center:${policy.plcyNo}`,
+    source: 'youth_center',
+    name: policy.plcyNm,
+    category: policy.lclsfNm ?? '청년정책',
+    subcategory: policy.mclsfNm ?? null,
+    provider: institution,
+    summary: cleanText(policy.plcyExplnCn),
+    content: buildPageContent(policy),
+    targetSummary: '청년',
+    benefitType: policy.plcyKywdNm ?? null,
+    applicationStart: dateRange.start,
+    applicationEnd: dateRange.end,
+    status: 'ACTIVE',
+    applyUrl:
+      policy.aplyUrlAddr ??
+      policy.refUrlAddr1 ??
+      `https://www.youthcenter.go.kr/youngPlcyMainView.do?plcyNo=${policy.plcyNo}`,
+    sidoCodes: extractSidoCodes(policy.zipCd),
+    tags: [policy.lclsfNm, policy.mclsfNm, policy.plcyKywdNm, '청년'].filter(Boolean) as string[],
+    rawData: policy as unknown as Record<string, unknown>,
+    qdrantPointId: String(plcyNoToPointId(policy.plcyNo)),
+    neo4jNodeId: `youth_${policy.plcyNo}`,
+    requirements,
+  };
 }
 
 // ── Qdrant upsert ────────────────────────────────────────
@@ -405,14 +508,10 @@ async function main() {
 
   // 2. 나머지 페이지 수집
   for (let page = 2; page <= totalPages; page++) {
-    try {
-      const { list } = await fetchYouthPolicies(page);
-      allPolicies.push(...list);
-    } catch (err) {
-      console.error(`   ⚠️ 페이지 ${page} 수집 실패:`, (err as Error).message);
-    }
+    const { list } = await fetchYouthPolicies(page);
+    allPolicies.push(...list);
     process.stdout.write(`   페이지 ${page}/${totalPages} 수집 완료\r`);
-    await new Promise((r) => setTimeout(r, 150)); // 서버 부하 방지
+    await sleep(150); // 서버 부하 방지
   }
   console.log(`\n✅ 목록 수집 완료: ${allPolicies.length}개`);
 
@@ -427,6 +526,17 @@ async function main() {
   console.log(
     `   증분 대상 - 벡터 ${plan.vectorUpdates.length}개, 그래프 ${plan.graphUpdates.length}개, 스킵 ${plan.skippedCount}개`,
   );
+
+  console.log('🗄️ Postgres 정책 동기화 중...');
+  for (let i = 0; i < allPolicies.length; i += EMBED_BATCH) {
+    const relationalBatch = allPolicies
+      .slice(i, i + EMBED_BATCH)
+      .map((item) => toRelationalPolicyInput(item));
+    await syncPoliciesToPostgres(relationalBatch);
+    const done = Math.min(i + EMBED_BATCH, allPolicies.length);
+    process.stdout.write(`   Postgres [${done}/${allPolicies.length}] 처리 완료\r`);
+  }
+  console.log('');
 
   if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
     console.log('✅ 변경 없음');
@@ -477,5 +587,6 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
+    await closePolicySyncDataSource();
     await neo4jDriver.close();
   });

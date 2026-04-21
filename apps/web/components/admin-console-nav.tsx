@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 import { useUserStore } from '../store/user.store';
+import { logoutRequest } from '../lib/api';
 
 const ITEMS = [
   { href: '/admin', label: '동기화 현황' },
@@ -16,10 +17,9 @@ export function AdminConsoleNav({ actions }: { actions?: ReactNode }) {
   const router = useRouter();
   const clearAuth = useUserStore((state) => state.clearAuth);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutRequest();
     clearAuth();
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
     router.push('/');
   };
 
