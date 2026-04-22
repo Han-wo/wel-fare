@@ -97,6 +97,40 @@ export function buildProfileText(profile: UserProfileType, age: number): string 
   return `${parts.join(' ')} 복지 지원 정책 혜택`;
 }
 
+export function normalizeCacheText(text: string) {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
+export function buildProfileCacheFingerprint(profile: UserProfileType | null) {
+  if (!profile) {
+    return 'anonymous';
+  }
+
+  return JSON.stringify({
+    userId: profile.userId ?? null,
+    birthDate: profile.birthDate ?? null,
+    gender: profile.gender ?? null,
+    sidoCode: profile.sidoCode ?? null,
+    sigunguCode: profile.sigunguCode ?? null,
+    dongName: profile.dongName ?? null,
+    householdType: profile.householdType ?? null,
+    householdCount: profile.householdCount ?? null,
+    occupationType: profile.occupationType ?? null,
+    employmentMonths: profile.employmentMonths ?? null,
+    annualIncome: profile.annualIncome ?? null,
+    incomeBracket: profile.incomeBracket ?? null,
+    isHomeowner: profile.isHomeowner,
+    isDisabled: profile.isDisabled,
+    disabilityGrade: profile.disabilityGrade ?? null,
+    isVeteran: profile.isVeteran,
+    isSingleParent: profile.isSingleParent,
+    hasChildren: profile.hasChildren,
+    childrenCount: profile.childrenCount ?? null,
+    isImmigrant: profile.isImmigrant,
+    educationLevel: profile.educationLevel ?? null,
+  });
+}
+
 export function extractPolicyName(text: string): string | null {
   const patterns = [
     /\[정책명\]\s*(.+)/,

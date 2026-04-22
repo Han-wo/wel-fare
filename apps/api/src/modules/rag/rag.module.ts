@@ -21,10 +21,12 @@ import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
 import { ChatModule } from '../chat/chat.module';
 import { RagTrace } from './entities/rag-trace.entity';
+import { DataSyncLog } from '../data-sync/entities/data-sync-log.entity';
+import { RagCacheService } from './rag-cache.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserProfile, ChatMessage, ChatSession, RagTrace]),
+    TypeOrmModule.forFeature([UserProfile, ChatMessage, ChatSession, RagTrace, DataSyncLog]),
     ConfigModule,
     ChatModule,
   ],
@@ -49,6 +51,7 @@ import { RagTrace } from './entities/rag-trace.entity';
     RetrieverServices,
     QueryAnalysisService,
     StreamingService,
+    RagCacheService,
     VectorRetrievalService,
     PolicyGraphService,
     HousingGraphService,
