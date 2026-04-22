@@ -1,7 +1,10 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 const SCROLL_LIMIT = 1000;
 const DELETE_BATCH = 500;
 const SOURCE = 'youth_center';

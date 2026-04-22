@@ -43,6 +43,7 @@ export class VectorRetrievalService {
 
     this.qdrantClient = new QdrantClient({
       url: this.config.get('QDRANT_URL', 'http://localhost:6333'),
+      apiKey: this.config.get('QDRANT_API_KEY'),
     });
 
     this.collectionName = this.config.get('QDRANT_COLLECTION', 'welfare_policies');

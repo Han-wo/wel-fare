@@ -6,6 +6,8 @@
     "REDIS_URL",
     "NEO4J_URI",
     "QDRANT_URL",
+    "QDRANT_API_KEY",
+    "QDRANT_VECTOR_SIZE",
     "OPENAI_API_KEY",
     "JWT_SECRET"
   ],

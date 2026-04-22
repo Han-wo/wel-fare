@@ -33,7 +33,10 @@ const EMBED_BATCH = 20; // 한 번에 임베딩할 정책 수
 const QDRANT_LOOKUP_BATCH = 50;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(

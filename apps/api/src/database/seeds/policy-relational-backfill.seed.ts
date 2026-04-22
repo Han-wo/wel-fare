@@ -25,7 +25,10 @@ const SOURCES = (process.env.POLICY_BACKFILL_SOURCES ?? 'local_bokjiro')
   .filter(Boolean);
 const BATCH_SIZE = 200;
 
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 
 function splitValues(value?: string) {
   return value

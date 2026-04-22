@@ -27,7 +27,10 @@ const PER_PAGE = 1000;
 const EMBED_BATCH = 20;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 const openai = new OpenAI({ apiKey: getRequiredEnv('OPENAI_API_KEY') });
 
 type StatRecord = Record<string, unknown>;
@@ -287,7 +290,7 @@ function buildApsPrzwnerContent(records: StatRecord[]): string {
 // ── 임베딩 ────────────────────────────────────────────────
 async function embedTexts(texts: string[]): Promise<number[][]> {
   const res = await openai.embeddings.create({
-    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-large',
+    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
     input: texts,
   });
   return res.data.map(d => d.embedding);

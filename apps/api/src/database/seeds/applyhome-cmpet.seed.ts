@@ -24,7 +24,10 @@ const PER_PAGE = 1000;
 const EMBED_BATCH = 20;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
@@ -172,7 +175,7 @@ function pointId(pblancNo: string, source: string): number {
 // ── 임베딩 ────────────────────────────────────────────────
 async function embedTexts(texts: string[]): Promise<number[][]> {
   const res = await openai.embeddings.create({
-    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-large',
+    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
     input: texts,
   });
   return res.data.map((d) => d.embedding);

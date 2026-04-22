@@ -1,8 +1,23 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 
+function resolveVectorSize() {
+  const explicit = process.env.QDRANT_VECTOR_SIZE;
+  if (explicit) {
+    const parsed = Number(explicit);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+
+  const model = process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
+  if (model === 'text-embedding-3-large') return 3072;
+  if (model === 'text-embedding-3-small') return 1536;
+
+  return 1536;
+}
+
 async function seedQdrant() {
   const client = new QdrantClient({
     url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+    apiKey: process.env.QDRANT_API_KEY,
   });
 
   const collectionName = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
@@ -12,7 +27,7 @@ async function seedQdrant() {
 
   if (!exists) {
     await client.createCollection(collectionName, {
-      vectors: { size: 3072, distance: 'Cosine' },
+      vectors: { size: resolveVectorSize(), distance: 'Cosine' },
       optimizers_config: { default_segment_number: 2 },
     });
 

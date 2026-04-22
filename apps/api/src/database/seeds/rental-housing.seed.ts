@@ -25,7 +25,10 @@ const QDRANT_RETRY_LIMIT = 3;
 const QDRANT_RETRY_DELAY_MS = 1500;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
-const qdrant = new QdrantClient({ url: process.env.QDRANT_URL ?? 'http://localhost:6333' });
+const qdrant = new QdrantClient({
+  url: process.env.QDRANT_URL ?? 'http://localhost:6333',
+  apiKey: process.env.QDRANT_API_KEY,
+});
 const neo4jDriver = neo4j.driver(
   process.env.NEO4J_URI ?? 'bolt://localhost:7687',
   neo4j.auth.basic(
@@ -450,7 +453,7 @@ function aggregateToComplexes(items: HousingItem[], brtcNm: string, signguNm: st
 // ── 임베딩 ─────────────────────────────────────────────
 async function embedTexts(texts: string[]): Promise<number[][]> {
   const res = await openai.embeddings.create({
-    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-large',
+    model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
     input: texts,
   });
   return res.data.map((d) => d.embedding);
