@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1400" />
+    <title>welFareAI — UI Redesign</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+    <style>
+      :root {
+        /* Claude-inspired warm neutral palette */
+        --bg-canvas: #f5f3ee;      /* soft cream */
+        --bg-surface: #ffffff;
+        --bg-subtle: #faf9f6;
+        --bg-hover: #f2efe8;
+        --bg-sidebar: #f0ede5;
+
+        --border: #e6e2d6;
+        --border-strong: #d6d1c2;
+
+        --text-primary: #1a1915;
+        --text-secondary: #4a473e;
+        --text-muted: #8a8678;
+        --text-faint: #b4afa0;
+
+        --accent: #2d6a5f;          /* Sage Teal — welfare, trust, warmth */
+        --accent-hover: #235951;
+        --accent-soft: #dfece8;
+        --accent-text: #1f4d45;
+
+        --success: #4a7c59;
+        --success-soft: #e6efe6;
+
+        --danger: #b54b3a;
+
+        --shadow-sm: 0 1px 2px rgba(26, 25, 21, 0.04);
+        --shadow: 0 1px 3px rgba(26, 25, 21, 0.06), 0 1px 2px rgba(26, 25, 21, 0.04);
+        --shadow-md: 0 4px 12px rgba(26, 25, 21, 0.06), 0 2px 4px rgba(26, 25, 21, 0.04);
+
+        --radius-xs: 6px;
+        --radius-sm: 8px;
+        --radius: 12px;
+        --radius-lg: 16px;
+
+        --font: 'Pretendard Variable', Pretendard, -apple-system, system-ui, sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; font-family: var(--font); color: var(--text-primary); background: #e8e4d8; }
+      body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+      /* Shared component styles used across artboards */
+      .artboard-root {
+        font-family: var(--font);
+        color: var(--text-primary);
+        background: var(--bg-canvas);
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .btn-primary {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        padding: 10px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500;
+        background: var(--accent); color: #fff; border: none; cursor: pointer;
+        transition: background 0.15s ease;
+        letter-spacing: -0.01em;
+      }
+      .btn-primary:hover { background: var(--accent-hover); }
+
+      .btn-secondary {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        padding: 10px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500;
+        background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border);
+        cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      .btn-secondary:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+
+      .btn-ghost {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
+        background: transparent; color: var(--text-secondary); border: none; cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+      .input {
+        width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+        background: var(--bg-surface); border: 1px solid var(--border);
+        font-family: var(--font); font-size: 14px; color: var(--text-primary);
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+      .input::placeholder { color: var(--text-faint); }
+
+      .label {
+        display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary);
+        margin-bottom: 6px; letter-spacing: -0.01em;
+      }
+
+      .card {
+        background: var(--bg-surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 20px;
+      }
+
+      .kbd {
+        display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 4px;
+        background: var(--bg-hover); border: 1px solid var(--border); font-size: 11px;
+        color: var(--text-secondary); font-family: var(--font); font-weight: 500;
+      }
+
+      /* Brand mark — simple serif W */
+      .brand-mark {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 28px; height: 28px; border-radius: 6px;
+        background: var(--accent); color: #fff;
+        font-family: 'Times New Roman', serif; font-weight: 600; font-size: 16px;
+        letter-spacing: -0.03em;
+      }
+      .brand-lockup {
+        display: inline-flex; align-items: center; gap: 8px;
+        font-size: 15px; font-weight: 600; letter-spacing: -0.02em; color: var(--text-primary);
+      }
+
+      /* Icon helpers */
+      .icon { width: 16px; height: 16px; stroke-width: 1.75; }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+    </style>
+  </head>
+  <body>
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+    <script type="text/babel" src="design-canvas.jsx"></script>
+    <script type="text/babel" src="icons.jsx"></script>
+    <script type="text/babel" src="screens/landing.jsx"></script>
+    <script type="text/babel" src="screens/auth.jsx"></script>
+    <script type="text/babel" src="screens/chat-index.jsx"></script>
+    <script type="text/babel" src="screens/chat-session.jsx"></script>
+    <script type="text/babel" src="screens/profile.jsx"></script>
+    <script type="text/babel" src="screens/admin-sync.jsx"></script>
+    <script type="text/babel" src="screens/admin-trace.jsx"></script>
+    <script type="text/babel" src="screens/admin-trace-extra.jsx"></script>
+    <script type="text/babel" src="screens/extra-pages.jsx"></script>
+    <script type="text/babel" src="app.jsx"></script>
+  </body>
+</html>

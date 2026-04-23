@@ -14,12 +14,24 @@ export class PoliciesController {
   @ApiOperation({ summary: '정책 목록 (페이지네이션)' })
   findAll(
     @Query('category') category?: string,
+    @Query('categoryGroup') categoryGroup?: string,
     @Query('sidoCode') sidoCode?: string,
     @Query('status') status?: string,
+    @Query('q') q?: string,
+    @Query('sort') sort?: 'recent' | 'deadline',
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.policiesService.findAll({ category, sidoCode, status, page, limit });
+    return this.policiesService.findAll({
+      category,
+      categoryGroup,
+      sidoCode,
+      status,
+      q,
+      sort,
+      page,
+      limit,
+    });
   }
 
   @Get('search')

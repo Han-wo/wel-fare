@@ -3,6 +3,7 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import type { Driver } from 'neo4j-driver';
 
 const LOOKUP_CHUNK_SIZE = 100;
+const QDRANT_RETRY_DELAY_MS = 600;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -14,6 +15,35 @@ function chunk<T>(items: T[], size: number): T[][] {
 
 function uniq(items: string[]): string[] {
   return [...new Set(items.filter(Boolean))];
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableQdrantError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /(fetch failed|socketerror|other side closed|econnreset|etimedout|und_err|429|5\d\d)/i.test(
+    message,
+  );
+}
+
+async function withQdrantRetry<T>(task: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableQdrantError(error) || attempt === attempts - 1) {
+        throw error;
+      }
+      await sleep(QDRANT_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+
+  throw lastError;
 }
 
 function assertCypherIdentifier(value: string): string {
@@ -55,18 +85,20 @@ export async function fetchExistingQdrantSyncHashes(
     let offset: string | number | Record<string, unknown> | undefined;
 
     do {
-      const response = await client.scroll(collectionName, {
-        filter: {
-          should: idChunk.map((policyId) => ({
-            key: 'policyId',
-            match: { value: policyId },
-          })),
-        },
-        limit: idChunk.length,
-        offset,
-        with_payload: true,
-        with_vector: false,
-      });
+      const response = await withQdrantRetry(() =>
+        client.scroll(collectionName, {
+          filter: {
+            should: idChunk.map((policyId) => ({
+              key: 'policyId',
+              match: { value: policyId },
+            })),
+          },
+          limit: idChunk.length,
+          offset,
+          with_payload: true,
+          with_vector: false,
+        }),
+      );
 
       for (const point of response.points ?? []) {
         const payload = (point.payload ?? {}) as Record<string, unknown>;

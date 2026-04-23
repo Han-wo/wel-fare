@@ -201,7 +201,7 @@ export function AdminTraceGraph({
 }) {
   if (graph.nodes.length === 0) {
     return (
-      <div className="surface-soft rounded-[24px] px-4 py-5 text-sm text-[var(--text-secondary)]">
+      <div className="rounded-[12px] bg-[var(--bg-subtle)] border border-[var(--border)] px-4 py-5 text-sm text-[var(--text-secondary)]">
         표시할 그래프 노드가 아직 없습니다.
       </div>
     );
@@ -292,8 +292,8 @@ function TraceGraphCanvas({
               key={phase.id}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
                 activePhase
-                  ? 'border-[rgba(47,111,91,0.24)] bg-[var(--brand-soft)] text-[var(--text-primary)]'
-                  : 'border-[var(--panel-border)] bg-white/74 text-[var(--text-secondary)]'
+                  ? 'border-[rgba(47,111,91,0.24)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                  : 'border-[var(--border)] bg-white/74 text-[var(--text-secondary)]'
               }`}
             >
               <span className="font-semibold">{phase.label}</span>
@@ -303,8 +303,8 @@ function TraceGraphCanvas({
         })}
       </div>
 
-      <div className="overflow-hidden rounded-[26px] border border-[var(--panel-border)] bg-white/80">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--panel-border)] bg-white/72 px-4 py-3">
+      <div className="overflow-hidden rounded-[26px] border border-[var(--border)] bg-white/80">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-white/72 px-4 py-3">
           <div>
             <p className="text-sm font-semibold text-[var(--text-primary)]">탐색 그래프</p>
             <p className="mt-1 text-xs text-[var(--text-secondary)]">
@@ -313,7 +313,7 @@ function TraceGraphCanvas({
           </div>
 
           {selectedNode ? (
-            <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-white/86 px-3 py-2 text-xs text-[var(--text-secondary)]">
+            <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/86 px-3 py-2 text-xs text-[var(--text-secondary)]">
               <span className="font-semibold text-[var(--text-primary)]">
                 {truncate(selectedNode.label, 48)}
               </span>
@@ -336,7 +336,7 @@ function TraceGraphCanvas({
                   key={phase.id}
                   className={`rounded-full border px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                     activePhase
-                      ? 'border-[rgba(47,111,91,0.22)] bg-[var(--brand-soft)] text-[var(--text-primary)]'
+                      ? 'border-[rgba(47,111,91,0.22)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
                       : 'border-[rgba(82,99,121,0.12)] bg-white/70 text-[var(--text-muted)]'
                   }`}
                 >
@@ -361,14 +361,14 @@ function TraceGraphCanvas({
             <Background color="rgba(124, 138, 157, 0.12)" gap={30} size={1} />
             <Controls
               showInteractive={false}
-              className="!overflow-hidden !rounded-2xl !border !border-[var(--panel-border)] !bg-white/92"
+              className="!overflow-hidden !rounded-2xl !border !border-[var(--border)] !bg-white/92"
             />
           </ReactFlow>
         </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-        <section className="surface-soft rounded-[24px] p-4">
+        <section className="rounded-[12px] bg-[var(--bg-subtle)] border border-[var(--border)] p-4">
           {selectedNode ? (
             <div className="space-y-4">
               <div>
@@ -379,14 +379,14 @@ function TraceGraphCanvas({
                   {selectedNode.label}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <span className="badge-soft !text-[11px] uppercase">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] text-[var(--accent-text)] border border-[var(--border)] px-2 py-0.5 !text-[11px] uppercase">
                     {resolveKindMeta(selectedNode.kind).label}
                   </span>
-                  <span className="badge-soft !text-[11px] uppercase">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] text-[var(--accent-text)] border border-[var(--border)] px-2 py-0.5 !text-[11px] uppercase">
                     {PHASES.find((phase) => phase.id === resolveKindMeta(selectedNode.kind).phase)?.label}
                   </span>
                   {typeof selectedNode.score === 'number' ? (
-                    <span className="badge-soft !text-[11px]">score {selectedNode.score.toFixed(2)}</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] text-[var(--accent-text)] border border-[var(--border)] px-2 py-0.5 !text-[11px]">score {selectedNode.score.toFixed(2)}</span>
                   ) : null}
                 </div>
               </div>
@@ -405,7 +405,7 @@ function TraceGraphCanvas({
           )}
         </section>
 
-        <section className="surface-soft rounded-[24px] p-4">
+        <section className="rounded-[12px] bg-[var(--bg-subtle)] border border-[var(--border)] p-4">
           <div className="space-y-5">
             <TraceEdgeGroup
               title="들어온 경로"
@@ -482,7 +482,7 @@ function TraceFlowNode({ data, selected }: NodeProps<Node<TraceFlowData>>) {
 
 function TracePill({ label, value }: { label: string; value: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-white/78 px-3 py-1.5 text-xs text-[var(--text-secondary)]">
+    <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white/78 px-3 py-1.5 text-xs text-[var(--text-secondary)]">
       <span className="font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">{label}</span>
       <span className="font-medium text-[var(--text-primary)]">{value}</span>
     </span>
@@ -512,7 +512,7 @@ function TraceEdgeGroup({
             return (
               <div
                 key={edge.id}
-                className="rounded-[18px] border border-[var(--panel-border)] bg-white/74 px-3 py-3"
+                className="rounded-[18px] border border-[var(--border)] bg-white/74 px-3 py-3"
               >
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                   {formatEdgeLabel(edge.label)}

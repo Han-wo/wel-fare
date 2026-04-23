@@ -46,6 +46,7 @@ const CLEAR_YOUTH =
   /청년수당|청년적금|청년도약계좌|청년희망적금|온통청년|청년내일채움|청년취업지원금|청년창업지원금|청년 정책 뭐|청년 지원금/;
 const CLEAR_DEADLINE = /지금\s*신청\s*가능|현재\s*접수\s*중|마감\s*임박|신청\s*가능한\s*청약|오늘\s*청약/;
 const CLEAR_HOUSING_SUB = /청약홈\s*공고|분양\s*공고|행복주택\s*청약|국민임대\s*청약|청약\s*일정|청약\s*접수\s*기간/;
+const CLEAR_HOUSING_TIMELINE = /향후\s*(\d{1,2})\s*일|향후\s*공고|예정\s*공고|전체\s*청약정보/;
 const CLEAR_RENTAL = /주거급여\s*신청|버팀목\s*전세|전세자금\s*대출|월세\s*보조금|LH\s*임대단지|공공임대\s*입주/;
 const CLEAR_FACILITY = /복지관\s*어디|시설\s*찾아|주간보호\s*센터|활동지원\s*기관|가까운\s*복지/;
 
@@ -66,6 +67,16 @@ const SPECIFIC_PROGRAM =
 
 @Injectable()
 export class QueryAnalysisService {
+  private extractDaysAhead(question: string) {
+    const match = question.match(/향후\s*(\d{1,2})\s*일|(\d{1,2})\s*일\s*기준|최대\s*(\d{1,2})\s*일/);
+    const raw = match?.slice(1).find(Boolean);
+    const parsed = raw ? Number(raw) : NaN;
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 30) {
+      return parsed;
+    }
+    return 30;
+  }
+
   resolveRoute(question: string): RagRouteDecision {
     if (ELIGIBILITY_INTENT.test(question)) {
       return {
@@ -99,6 +110,14 @@ export class QueryAnalysisService {
         toolName: 'get_upcoming_deadlines',
         args: { userId: input.userId, days_ahead: 14, traceId: input.traceId },
         detail: '정규식 규칙이 질문을 get_upcoming_deadlines로 바로 라우팅했습니다.',
+      };
+    }
+    if (CLEAR_HOUSING_TIMELINE.test(q) && /청약|공고|분양|행복주택|국민임대|신혼희망타운/i.test(q)) {
+      const daysAhead = this.extractDaysAhead(q);
+      return {
+        toolName: 'get_upcoming_deadlines',
+        args: { userId: input.userId, days_ahead: daysAhead, traceId: input.traceId },
+        detail: '정규식 규칙이 향후 청약 일정 질문을 get_upcoming_deadlines로 라우팅했습니다.',
       };
     }
     if (CLEAR_YOUTH.test(q) && !CLEAR_HOUSING_SUB.test(q)) {
@@ -183,11 +202,7 @@ export class QueryAnalysisService {
         (YOUTH.test(question) || HOUSING.test(question) || PERSONALIZED.test(question)));
     const needsHousing = input.routeType === 'ELIGIBILITY' && HOUSING.test(question);
 
-    if (
-      (input.routeType === 'ELIGIBILITY' || input.routeType === 'APPLICATION_ASSIST') &&
-      PRONOUN_POLICY.test(question) &&
-      !hasSpecificProgram
-    ) {
+    if (PRONOUN_POLICY.test(question) && !hasSpecificProgram) {
       missingFields.push('policy_name');
     }
 

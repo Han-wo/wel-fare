@@ -17,7 +17,7 @@ const components: Components = {
   ol: ({ children }) => <ol className="mb-3 ml-4 list-decimal space-y-1">{children}</ol>,
   li: ({ children }) => (
     <li className="flex gap-2 text-sm leading-relaxed text-[var(--text-secondary)]">
-      <span className="mt-0.5 shrink-0 text-[var(--brand)]">·</span>
+      <span className="mt-0.5 shrink-0 text-[var(--accent)]">·</span>
       <span>{children}</span>
     </li>
   ),
@@ -27,7 +27,7 @@ const components: Components = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-[var(--brand)] underline underline-offset-2 transition hover:text-[var(--brand-strong)]"
+      className="text-[var(--accent)] underline underline-offset-2 transition hover:text-[var(--accent-hover)]"
     >
       {children}
     </a>
@@ -42,17 +42,17 @@ const components: Components = {
       );
     }
     return (
-      <code className="rounded bg-[#eff3f7] px-1.5 py-0.5 font-mono text-xs text-[var(--brand-strong)]">
+      <code className="rounded bg-[#eff3f7] px-1.5 py-0.5 font-mono text-xs text-[var(--accent-hover)]">
         {children}
       </code>
     );
   },
   blockquote: ({ children }) => (
-    <blockquote className="my-3 border-l-2 border-[rgba(47,111,91,0.35)] pl-4 text-sm italic text-[var(--text-muted)]">
+    <blockquote className="my-3 border-l-2 border-[var(--accent)] pl-4 text-sm italic text-[var(--text-muted)]">
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-4 border-[rgba(19,32,51,0.08)]" />,
+  hr: () => <hr className="my-4 border-[var(--border)]" />,
 };
 
 export function MarkdownMessage({ content }: { content: string }) {

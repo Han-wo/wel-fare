@@ -11,7 +11,24 @@ import type { RunnableConfig } from '@langchain/core/runnables';
 import type { UserProfile } from '@welfare-ai/shared-types';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
 import { retrievalResultToPromptBlock } from './retrieval.types';
+import type { EligibilityRetrievalResult, RetrievalResult } from './retrieval.types';
 import { type RagGraphServices } from './rag.graph';
+import type { RagThinkPayload } from './thinking.types';
+import { detectAnswerNeedsHitl } from './hitl-detection';
+
+const RETRIEVAL_MIN_AVG_SCORE = 0.35;
+
+function isRetrievalInsufficient(
+  result: RetrievalResult | EligibilityRetrievalResult,
+): boolean {
+  if (result.items.length === 0) return true;
+  const scores = result.items
+    .map((item) => item.score ?? null)
+    .filter((score): score is number => typeof score === 'number');
+  if (scores.length === 0) return false;
+  const avg = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  return avg < RETRIEVAL_MIN_AVG_SCORE;
+}
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -25,6 +42,7 @@ const GraphState = Annotation.Root({
   profile: Annotation<UserProfile | null>(),
   answer: Annotation<string>(),
   streamCallback: Annotation<((token: string) => void) | null>(),
+  hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
   eligibilityContext: Annotation<string>(),
 });
 
@@ -87,12 +105,23 @@ async function streamAnswer(
 }
 
 export function createEligibilityGraph(services: RagGraphServices) {
+  const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
+    if (!traceId) return;
+    services.emitThink(traceId, input);
+  };
+
   const llm = new ChatOpenAI({
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
   });
 
   async function loadContext(state: EligibilityGraphState): Promise<Partial<EligibilityGraphState>> {
+    emitThink(state.traceId, {
+      phase: '컨텍스트 로드',
+      content: '프로필과 이전 대화를 불러오는 중입니다.',
+      node: 'load_context',
+      status: 'active',
+    });
     const [profile, rawHistory] = await Promise.all([
       services.getProfile(state.userId),
       services.loadHistory(state.sessionId),
@@ -124,6 +153,12 @@ export function createEligibilityGraph(services: RagGraphServices) {
   async function requestMissingInfo(
     state: EligibilityGraphState,
   ): Promise<Partial<EligibilityGraphState>> {
+    emitThink(state.traceId, {
+      phase: '질문 점검',
+      content: '자격 판단에 필요한 정보가 충분한지 확인하는 중입니다.',
+      node: 'request_missing_info',
+      status: 'active',
+    });
     const clarification = services.queryAnalysis.getClarificationRequest({
       routeType: 'ELIGIBILITY',
       question: state.question,
@@ -131,6 +166,12 @@ export function createEligibilityGraph(services: RagGraphServices) {
     });
 
     if (!clarification) {
+      emitThink(state.traceId, {
+        phase: '질문 점검',
+        content: '추가 정보 없이 자격 가능성 판단을 진행할 수 있습니다.',
+        node: 'request_missing_info',
+        status: 'done',
+      });
       return {};
     }
 
@@ -145,7 +186,21 @@ export function createEligibilityGraph(services: RagGraphServices) {
       },
     });
 
+    const questionnaire = await services.hitlSuggestion.buildMissingFieldQuestionnaire({
+      missingFields: clarification.missingFields,
+      question: state.question,
+      profile: state.profile,
+    });
+
+    state.hitlCallback?.(questionnaire);
     state.streamCallback?.(clarification.prompt);
+
+    emitThink(state.traceId, {
+      phase: '추가 정보 요청',
+      content: clarification.detail,
+      node: 'request_missing_info',
+      status: 'done',
+    });
 
     return {
       messages: [new AIMessage(clarification.prompt)],
@@ -156,6 +211,12 @@ export function createEligibilityGraph(services: RagGraphServices) {
   async function collectEligibilityContext(
     state: EligibilityGraphState,
   ): Promise<Partial<EligibilityGraphState>> {
+    emitThink(state.traceId, {
+      phase: '자격 근거 수집',
+      content: '정책 후보와 사용자 조건을 비교할 근거를 모으는 중입니다.',
+      node: 'collect_eligibility_context',
+      status: 'active',
+    });
     const result = await services.searchPolicyEligibility(
       state.question,
       state.userId,
@@ -183,17 +244,83 @@ export function createEligibilityGraph(services: RagGraphServices) {
       payload: { candidateCount: result.items.length, source: result.source },
     });
 
+    emitThink(state.traceId, {
+      phase: '자격 근거 수집',
+      content: `${result.summary} 자격 판단 근거를 정리했습니다.`,
+      node: 'collect_eligibility_context',
+      status: 'done',
+    });
+
+    if (isRetrievalInsufficient(result)) {
+      const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+        question: state.question,
+        profile: state.profile,
+        retrieval: result,
+      });
+      state.hitlCallback?.(questionnaire);
+      const message = '관련 근거가 부족해 먼저 질문 범위를 확인하고 싶어요.';
+      state.streamCallback?.(message);
+
+      services.recordEvent(state.traceId, {
+        type: 'decision',
+        title: '근거 부족 — HITL 추천 요청',
+        detail: message,
+        payload: { candidateCount: result.items.length, reason: questionnaire.reason },
+      });
+
+      return {
+        eligibilityContext: contextText,
+        messages: [new AIMessage(message)],
+        answer: message,
+      };
+    }
+
     return {
       eligibilityContext: contextText,
       messages: [new HumanMessage(contextText)],
     };
   }
 
+  function routeAfterContext(
+    state: EligibilityGraphState,
+  ): 'generate_answer' | 'save_message' {
+    return state.answer ? 'save_message' : 'generate_answer';
+  }
+
   async function generateAnswer(
     state: EligibilityGraphState,
     config?: RunnableConfig,
   ): Promise<Partial<EligibilityGraphState>> {
+    emitThink(state.traceId, {
+      phase: '답변 작성',
+      content: '가능 여부와 확인 포인트를 정리하는 중입니다.',
+      node: 'generate_answer',
+      status: 'active',
+    });
     return streamAnswer(llm, state, config);
+  }
+
+  async function verifyAnswer(
+    state: EligibilityGraphState,
+  ): Promise<Partial<EligibilityGraphState>> {
+    const detection = detectAnswerNeedsHitl(state.answer);
+    if (!detection.needsHitl) return {};
+
+    const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+      question: state.question,
+      profile: state.profile,
+      retrieval: null,
+    });
+    state.hitlCallback?.(questionnaire);
+
+    services.recordEvent(state.traceId, {
+      type: 'decision',
+      title: '답변 후 HITL 전환',
+      detail: questionnaire.detail,
+      payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
+    });
+
+    return {};
   }
 
   async function saveMessage(state: EligibilityGraphState): Promise<Partial<EligibilityGraphState>> {
@@ -214,6 +341,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
     .addNode('request_missing_info', requestMissingInfo)
     .addNode('collect_eligibility_context', collectEligibilityContext)
     .addNode('generate_answer', generateAnswer)
+    .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
@@ -221,8 +349,12 @@ export function createEligibilityGraph(services: RagGraphServices) {
       collect_eligibility_context: 'collect_eligibility_context',
       save_message: 'save_message',
     })
-    .addEdge('collect_eligibility_context', 'generate_answer')
-    .addEdge('generate_answer', 'save_message')
+    .addConditionalEdges('collect_eligibility_context', routeAfterContext, {
+      generate_answer: 'generate_answer',
+      save_message: 'save_message',
+    })
+    .addEdge('generate_answer', 'verify_answer')
+    .addEdge('verify_answer', 'save_message')
     .addEdge('save_message', END)
     .compile();
 }

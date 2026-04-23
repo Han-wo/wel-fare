@@ -4,6 +4,8 @@
  * 실행: ts-node --transpile-only src/database/seeds/local-welfare.seed.ts
  */
 import axios from 'axios';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import * as xml2js from 'xml2js';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
@@ -31,6 +33,10 @@ const LOCAL_BASE_URL =
 const PAGE_SIZE = 100;
 const EMBED_BATCH = 20;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
+const publicApiClient = axios.create({
+  httpAgent: new http.Agent({ keepAlive: false }),
+  httpsAgent: new https.Agent({ keepAlive: false }),
+});
 
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL ?? 'http://localhost:6333',
@@ -78,7 +84,14 @@ function sleep(ms: number) {
 }
 
 function isRetryableRequestError(error: unknown) {
-  return axios.isAxiosError(error) && (error.response?.status === 429 || (error.response?.status ?? 0) >= 500);
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status ?? 0;
+  return (
+    status === 429 ||
+    status >= 500 ||
+    !error.response ||
+    ['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error.code ?? '')
+  );
 }
 
 async function withRetry<T>(task: () => Promise<T>, attempts = 4, baseDelayMs = 750): Promise<T> {
@@ -149,7 +162,7 @@ async function parseXml(xml: string): Promise<Record<string, unknown>> {
 
 async function fetchList(pageNo: number): Promise<{ total: number; items: LocalPolicyListItem[] }> {
   const { data } = await withRetry(() =>
-    axios.get(`${LOCAL_BASE_URL}/LcgvWelfarelist`, {
+    publicApiClient.get(`${LOCAL_BASE_URL}/LcgvWelfarelist`, {
       params: { serviceKey: API_KEY, numOfRows: PAGE_SIZE, pageNo },
       responseType: 'text',
       timeout: 15000,
@@ -184,7 +197,7 @@ async function fetchList(pageNo: number): Promise<{ total: number; items: LocalP
 async function fetchDetail(servId: string): Promise<Partial<LocalPolicyDetail>> {
   try {
     const { data } = await withRetry(() =>
-      axios.get(`${LOCAL_BASE_URL}/LcgvWelfaredetailed`, {
+      publicApiClient.get(`${LOCAL_BASE_URL}/LcgvWelfaredetailed`, {
         params: { serviceKey: API_KEY, servId },
         timeout: 10000,
       }),
@@ -301,7 +314,15 @@ async function upsertToQdrant(
       syncHash,
     },
   }));
-  await qdrant.upsert(COLLECTION, { wait: true, points });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await qdrant.upsert(COLLECTION, { wait: true, points });
+      return;
+    } catch (error) {
+      if (attempt === 2) throw error;
+      await sleep(1000 * (attempt + 1));
+    }
+  }
 }
 
 // ── Neo4j upsert ─────────────────────────────────────────

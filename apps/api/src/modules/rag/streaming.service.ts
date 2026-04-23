@@ -1,10 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ChatRuntimeService } from '../chat/chat-runtime.service';
+import type { RagThinkPayload } from './thinking.types';
+import type { HitlQuestionnaire } from './hitl.types';
 
 export type RagStreamEvent =
   | { type: 'session_created'; data: string }
   | { type: 'think'; data: '' }
+  | { type: 'think_detail'; data: RagThinkPayload }
   | { type: 'text'; data: string }
+  | { type: 'hitl'; data: HitlQuestionnaire }
   | { type: 'done'; data: '' };
 
 type StreamExecutorResult = {
@@ -23,6 +27,8 @@ export class StreamingService {
       onStart?: () => Promise<void> | void;
       run: (input: {
         pushText: (text: string) => Promise<void>;
+        pushThink: (payload: RagThinkPayload) => Promise<void>;
+        pushHitl: (payload: HitlQuestionnaire) => Promise<void>;
         isClosed: () => Promise<boolean>;
       }) => Promise<StreamExecutorResult>;
       onSuccess: (result: StreamExecutorResult) => Promise<void>;
@@ -60,10 +66,34 @@ export class StreamingService {
       this.chatRuntime.notifyActivity(sessionId, streamToken);
     };
 
+    const pushThink = async (payload: RagThinkPayload) => {
+      if (await this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+        return;
+      }
+
+      events.push({ type: 'think_detail', data: payload });
+      this.chatRuntime.notifyActivity(sessionId, streamToken);
+    };
+
+    const pushHitl = async (payload: HitlQuestionnaire) => {
+      this.logger.log(
+        `[HITL] push 시도 sessionId=${sessionId} id=${payload.id} reason=${payload.reason} questions=${payload.questions.length}`,
+      );
+      if (await this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
+        this.logger.warn(`[HITL] 스트림 종료로 drop sessionId=${sessionId}`);
+        return;
+      }
+
+      events.push({ type: 'hitl', data: payload });
+      this.chatRuntime.notifyActivity(sessionId, streamToken);
+    };
+
     void Promise.resolve()
       .then(() =>
         handlers.run({
           pushText,
+          pushThink,
+          pushHitl,
           isClosed: () => this.chatRuntime.isStreamClosed(sessionId, streamToken),
         }),
       )

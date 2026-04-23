@@ -10,10 +10,14 @@ import { RetrieverServices } from './retriever-services.service';
 import { QueryAnalysisService, type RagRouteType } from './query-analysis.service';
 import { TraceFacade } from './trace-facade.service';
 import { StreamingService, type RagStreamEvent } from './streaming.service';
+import { RagThinkingStreamService } from './rag-thinking-stream.service';
+import { HitlSuggestionService } from './hitl-suggestion.service';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
 import { ChatRuntimeService } from '../chat/chat-runtime.service';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
+import type { RagThinkPayload } from './thinking.types';
+import type { HitlQuestionnaire } from './hitl.types';
 
 @Injectable()
 export class RagOrchestratorService {
@@ -31,11 +35,14 @@ export class RagOrchestratorService {
     private readonly queryAnalysis: QueryAnalysisService,
     private readonly traceFacade: TraceFacade,
     private readonly streamingService: StreamingService,
+    private readonly thinkingStream: RagThinkingStreamService,
     private readonly chatRuntime: ChatRuntimeService,
     private readonly config: ConfigService,
+    private readonly hitlSuggestion: HitlSuggestionService,
   ) {
     const services: RagGraphServices = {
       queryAnalysis: this.queryAnalysis,
+      hitlSuggestion: this.hitlSuggestion,
       getProfile: this.retrievers.getProfile.bind(this.retrievers),
       searchWelfare: traceable(this.retrievers.searchWelfare.bind(this.retrievers), {
         name: 'search_welfare',
@@ -86,6 +93,7 @@ export class RagOrchestratorService {
       recordContext: this.traceFacade.recordContext.bind(this.traceFacade),
       recordEvent: this.traceFacade.addEvent.bind(this.traceFacade),
       recordToolSelection: this.traceFacade.recordToolSelection.bind(this.traceFacade),
+      emitThink: this.thinkingStream.emit.bind(this.thinkingStream),
       calcAge,
       getSidoName,
     };
@@ -120,34 +128,76 @@ export class RagOrchestratorService {
       onStart: async () => {
         await this.saveUserMessage(sessionId, question);
       },
-      run: async ({ pushText, isClosed }) => {
-        const result = await graph.invoke(
-          {
-            question,
-            userId,
-            sessionId,
-            traceId,
-            messages: [],
-            profile: null,
-            answer: '',
-            streamCallback: (token: string) => {
-              void isClosed().then((closed) => {
-                if (!closed) {
-                  void pushText(token);
-                }
-              });
-            },
-          },
-          {
-            runName: 'welfare-rag-pipeline',
-            tags: ['welfare-ai', 'rag', 'langgraph'],
-            metadata: { userId, sessionId, traceId, routeType: routeDecision.routeType },
-          },
-        );
-
-        return {
-          answer: typeof result?.answer === 'string' ? result.answer : '',
+      run: async ({ pushText, pushThink, pushHitl, isClosed }) => {
+        const emitThink = (payload: RagThinkPayload) => {
+          void isClosed().then((closed) => {
+            if (!closed) {
+              void pushThink(payload);
+            }
+          });
         };
+        const emitHitl = (payload: HitlQuestionnaire) => {
+          void isClosed().then((closed) => {
+            if (!closed) {
+              void pushHitl(payload);
+            }
+          });
+        };
+
+        emitThink({
+          phase: '질문 분석',
+          content: '질문을 확인하고 처리 경로를 정하는 중입니다.',
+          node: 'route',
+          status: 'active',
+        });
+        emitThink({
+          phase: '라우트 결정',
+          content: routeDecision.detail,
+          node: routeDecision.routeType.toLowerCase(),
+          status: 'done',
+        });
+
+        this.thinkingStream.register(traceId, emitThink);
+
+        try {
+          const result = await graph.invoke(
+            {
+              question,
+              userId,
+              sessionId,
+              traceId,
+              messages: [],
+              profile: null,
+              answer: '',
+              streamCallback: (token: string) => {
+                void isClosed().then((closed) => {
+                  if (!closed) {
+                    void pushText(token);
+                  }
+                });
+              },
+              hitlCallback: emitHitl,
+            },
+            {
+              runName: 'welfare-rag-pipeline',
+              tags: ['welfare-ai', 'rag', 'langgraph'],
+              metadata: { userId, sessionId, traceId, routeType: routeDecision.routeType },
+            },
+          );
+
+          emitThink({
+            phase: '답변 정리',
+            content: '찾은 근거를 바탕으로 답변을 정리하고 있습니다.',
+            node: 'answer',
+            status: 'done',
+          });
+
+          return {
+            answer: typeof result?.answer === 'string' ? result.answer : '',
+          };
+        } finally {
+          this.thinkingStream.unregister(traceId, emitThink);
+        }
       },
       onSuccess: async ({ answer }) => {
         if (answer) {

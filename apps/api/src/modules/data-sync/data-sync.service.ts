@@ -27,6 +27,8 @@ const SYNC_SEEDS = [
   { key: 'applyhome-stat', name: '청약 통계', script: 'applyhome-stat.seed.ts' },
 ] as const;
 
+const STALE_RUN_THRESHOLD_MS = 12 * 60 * 60 * 1000;
+
 type SyncSeedConfig = (typeof SYNC_SEEDS)[number];
 type SeedExecutionResult = {
   success: boolean;
@@ -117,6 +119,28 @@ export type SyncSourceStatus = {
   vectorCount: number | null;
   graphCount: number | null;
   skippedCount: number | null;
+};
+
+export type DataFreshnessSnapshot = {
+  seedKey: string;
+  seedName: string;
+  storage: 'postgres' | 'neo4j' | 'qdrant';
+  actualUpdatedAt: Date | null;
+  latestDataDate: string | null;
+  recordCount: number | null;
+  lastSuccessSyncAt: Date | null;
+  lastRunStatus: DataSyncStatus | null;
+  freshness: 'fresh' | 'warning' | 'stale' | 'missing';
+  usesLogFallback: boolean;
+  note: string | null;
+};
+
+type ActualFreshnessRow = {
+  seedKey: string;
+  storage: 'postgres' | 'neo4j' | 'qdrant';
+  actualUpdatedAt: Date | null;
+  latestDataDate: string | null;
+  recordCount: number | null;
 };
 
 @Injectable()
@@ -360,6 +384,7 @@ export class DataSyncService {
   }
 
   async getSyncStatus() {
+    await this.clearStaleActiveRuns();
     const activeRun = await this.getLatestRunAggregate({ activeOnly: true });
     const latestCompletedRun = await this.getLatestRunAggregate({ completedOnly: true });
 
@@ -377,6 +402,7 @@ export class DataSyncService {
   }
 
   async getSourceStatuses(): Promise<SyncSourceStatus[]> {
+    await this.clearStaleActiveRuns();
     const rows = await this.logRepo.query(`
       SELECT DISTINCT ON ("seedKey")
         id,
@@ -415,6 +441,97 @@ export class DataSyncService {
       graphCount: row.graphCount === null ? null : Number(row.graphCount),
       skippedCount: row.skippedCount === null ? null : Number(row.skippedCount),
     }));
+  }
+
+  async getFreshnessSnapshots(): Promise<DataFreshnessSnapshot[]> {
+    await this.clearStaleActiveRuns();
+
+    const [sourceStatuses, successRows, policyRows, graphRows, cmpetCount, statCount] = await Promise.all([
+      this.getSourceStatuses(),
+      this.logRepo.query(`
+        SELECT DISTINCT ON ("seedKey")
+          "seedKey",
+          "finishedAt"
+        FROM data_sync_logs
+        WHERE status = 'SUCCESS'
+        ORDER BY "seedKey", "finishedAt" DESC NULLS LAST, "startedAt" DESC
+      `),
+      this.logRepo.manager.query(`
+        SELECT
+          source,
+          MAX("syncedAt") AS "actualUpdatedAt",
+          MAX(COALESCE("applicationEnd", "applicationStart")) AS "latestDataDate",
+          COUNT(*)::int AS "recordCount"
+        FROM policies
+        WHERE source IN ('bokjiro', 'local_bokjiro', 'youth_center')
+        GROUP BY source
+      `),
+      this.getGraphFreshnessRows(),
+      this.getQdrantSourceCount('applyhome_cmpet'),
+      this.getQdrantSourceCount('applyhome_stat'),
+    ]);
+
+    const actualRows: ActualFreshnessRow[] = [
+      ...policyRows.map((row: Record<string, unknown>) => ({
+        seedKey: this.policySourceToSeedKey(String(row.source)),
+        storage: 'postgres' as const,
+        actualUpdatedAt: this.parseDateValue(row.actualUpdatedAt),
+        latestDataDate: this.normalizeDateLabel(row.latestDataDate),
+        recordCount: row.recordCount === null ? null : Number(row.recordCount),
+      })),
+      ...graphRows,
+      {
+        seedKey: 'applyhome-cmpet',
+        storage: 'qdrant',
+        actualUpdatedAt: null,
+        latestDataDate: null,
+        recordCount: cmpetCount,
+      },
+      {
+        seedKey: 'applyhome-stat',
+        storage: 'qdrant',
+        actualUpdatedAt: null,
+        latestDataDate: null,
+        recordCount: statCount,
+      },
+    ];
+
+    const actualMap = new Map(actualRows.map((row) => [row.seedKey, row]));
+    const statusMap = new Map(sourceStatuses.map((row) => [row.seedKey, row]));
+    const successMap = new Map(
+      successRows.map((row: Record<string, unknown>) => [
+        String(row.seedKey),
+        this.parseDateValue(row.finishedAt),
+      ]),
+    );
+
+    return SYNC_SEEDS.map((seed) => {
+      const actual = actualMap.get(seed.key);
+      const latest = statusMap.get(seed.key);
+      const lastSuccessSyncAt = successMap.get(seed.key) ?? null;
+      const actualUpdatedAt = actual?.actualUpdatedAt ?? null;
+      const usesLogFallback = !actualUpdatedAt && Boolean(lastSuccessSyncAt);
+
+      return {
+        seedKey: seed.key,
+        seedName: seed.name,
+        storage: actual?.storage ?? this.defaultStorageForSeed(seed.key),
+        actualUpdatedAt,
+        latestDataDate: actual?.latestDataDate ?? null,
+        recordCount: actual?.recordCount ?? null,
+        lastSuccessSyncAt,
+        lastRunStatus: latest?.status ?? null,
+        freshness: this.determineFreshness(actualUpdatedAt ?? lastSuccessSyncAt ?? null),
+        usesLogFallback,
+        note: this.buildFreshnessNote({
+          seedKey: seed.key,
+          actualUpdatedAt,
+          lastSuccessSyncAt,
+          lastRunStatus: latest?.status ?? null,
+          usesLogFallback,
+        }),
+      };
+    });
   }
 
   private async createRunLogs(
@@ -893,12 +1010,60 @@ export class DataSyncService {
   }
 
   private async getActiveRunId() {
+    await this.clearStaleActiveRuns();
+
     if (this.currentRunId && this.isSyncing) {
       return this.currentRunId;
     }
 
     const activeRun = await this.getLatestRunAggregate({ activeOnly: true });
     return activeRun?.runId ?? null;
+  }
+
+  private async clearStaleActiveRuns() {
+    const threshold = new Date(Date.now() - STALE_RUN_THRESHOLD_MS);
+    const staleLogs = await this.logRepo.find({
+      where: [
+        { status: 'RUNNING' as const },
+        { status: 'PENDING' as const },
+      ],
+    });
+
+    const targets = staleLogs.filter((log) => {
+      const lastTouched = log.updatedAt ?? log.startedAt;
+      return lastTouched.getTime() < threshold.getTime();
+    });
+
+    if (targets.length === 0) {
+      return 0;
+    }
+
+    const finishedAt = new Date();
+    await Promise.all(
+      targets.map((log) =>
+        this.logRepo.update(log.id, {
+          status: 'FAILED',
+          finishedAt,
+          durationMs: finishedAt.getTime() - log.startedAt.getTime(),
+          phase: '중단됨',
+          summary:
+            log.summary?.trim() ||
+            '프로세스가 비정상 종료되어 stale RUNNING/PENDING 상태를 FAILED로 정리했습니다.',
+          stderr: this.mergeOutput(
+            log.stderr ?? '',
+            'stale sync log auto-cleanup: process did not finish and exceeded threshold',
+          ),
+        }),
+      ),
+    );
+
+    if (this.currentRunId && targets.some((log) => log.runId === this.currentRunId)) {
+      this.currentRunId = null;
+      this.isSyncing = false;
+    }
+
+    this.logger.warn(`stale sync logs cleaned up: ${targets.length}`);
+    return targets.length;
   }
 
   private async getLatestRunAggregate(options?: {
@@ -956,5 +1121,181 @@ export class DataSyncService {
         .filter((summary): summary is string => Boolean(summary))
         .join('\n') || null,
     };
+  }
+
+  private async getGraphFreshnessRows(): Promise<ActualFreshnessRow[]> {
+    const session = this.neo4jDriver.session();
+    try {
+      const result = await session.run(`
+        CALL {
+          MATCH (n:HousingComplex)
+          WHERE n.source = 'lh_housing'
+          RETURN
+            'rental-housing' AS seedKey,
+            'neo4j' AS storage,
+            count(n) AS recordCount,
+            toString(max(n.updatedAt)) AS actualUpdatedAt,
+            NULL AS latestDataDate
+          UNION ALL
+          MATCH (n:WelfareFacility)
+          WHERE n.source = 'welfare_facility'
+          RETURN
+            'facility' AS seedKey,
+            'neo4j' AS storage,
+            count(n) AS recordCount,
+            toString(max(n.updatedAt)) AS actualUpdatedAt,
+            NULL AS latestDataDate
+          UNION ALL
+          MATCH (n:HousingAnnouncement)
+          WHERE n.source = 'myhome_announcement'
+          RETURN
+            'housing-announcement' AS seedKey,
+            'neo4j' AS storage,
+            count(n) AS recordCount,
+            toString(max(n.updatedAt)) AS actualUpdatedAt,
+            max(replace(coalesce(n.annoDate, ''), '-', '')) AS latestDataDate
+          UNION ALL
+          MATCH (n:HousingAnnouncement)
+          WHERE n.source = 'applyhome'
+          RETURN
+            'applyhome' AS seedKey,
+            'neo4j' AS storage,
+            count(n) AS recordCount,
+            toString(max(n.updatedAt)) AS actualUpdatedAt,
+            max(replace(coalesce(n.subscptEndde, n.annoDate, ''), '-', '')) AS latestDataDate
+        }
+        RETURN seedKey, storage, recordCount, actualUpdatedAt, latestDataDate
+      `);
+
+      return result.records.map((record) => ({
+        seedKey: String(record.get('seedKey')),
+        storage: String(record.get('storage')) as ActualFreshnessRow['storage'],
+        recordCount: this.toNumberOrNull(record.get('recordCount')),
+        actualUpdatedAt: this.parseDateValue(record.get('actualUpdatedAt')),
+        latestDataDate: this.normalizeDateLabel(record.get('latestDataDate')),
+      }));
+    } catch (error) {
+      this.logger.warn(`그래프 최신성 조회 실패: ${(error as Error).message}`);
+      return [];
+    } finally {
+      await session.close();
+    }
+  }
+
+  private async getQdrantSourceCount(source: string): Promise<number | null> {
+    try {
+      const result = await this.qdrant.count(this.collection, {
+        exact: true,
+        filter: { must: [{ key: 'source', match: { value: source } }] },
+      });
+      return result.count;
+    } catch (error) {
+      this.logger.warn(`Qdrant 최신성 조회 실패 [${source}]: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  private determineFreshness(referenceAt: Date | null): DataFreshnessSnapshot['freshness'] {
+    if (!referenceAt) return 'missing';
+
+    const ageHours = (Date.now() - referenceAt.getTime()) / (1000 * 60 * 60);
+    if (ageHours <= 48) return 'fresh';
+    if (ageHours <= 24 * 7) return 'warning';
+    return 'stale';
+  }
+
+  private buildFreshnessNote(input: {
+    seedKey: string;
+    actualUpdatedAt: Date | null;
+    lastSuccessSyncAt: Date | null;
+    lastRunStatus: DataSyncStatus | null;
+    usesLogFallback: boolean;
+  }): string | null {
+    if (input.usesLogFallback) {
+      return '실데이터 타임스탬프가 없어 마지막 성공 로그 기준으로 표시합니다.';
+    }
+
+    if (input.lastRunStatus === 'FAILED') {
+      return '최근 실행이 실패했습니다. 실데이터 시각과 별도로 재동기화가 필요할 수 있습니다.';
+    }
+
+    if (input.actualUpdatedAt && input.lastSuccessSyncAt) {
+      const diffMs = input.actualUpdatedAt.getTime() - input.lastSuccessSyncAt.getTime();
+      if (diffMs > 60 * 60 * 1000) {
+        return '실데이터가 로그보다 최신입니다. 직접 시드 실행 또는 로그 누락 가능성이 있습니다.';
+      }
+      if (diffMs < -24 * 60 * 60 * 1000) {
+        return '로그는 더 최근인데 실데이터 갱신 시각은 더 오래됐습니다. 적재 결과를 확인하세요.';
+      }
+    }
+
+    if (input.seedKey === 'housing-announcement' || input.seedKey === 'applyhome') {
+      return '최신 공고일과 접수일은 별도 도메인 날짜로 함께 확인하세요.';
+    }
+
+    return null;
+  }
+
+  private policySourceToSeedKey(source: string) {
+    if (source === 'bokjiro') return 'welfare';
+    if (source === 'local_bokjiro') return 'local-welfare';
+    if (source === 'youth_center') return 'youth-policy';
+    return source;
+  }
+
+  private defaultStorageForSeed(seedKey: string): DataFreshnessSnapshot['storage'] {
+    if (seedKey === 'welfare' || seedKey === 'local-welfare' || seedKey === 'youth-policy') {
+      return 'postgres';
+    }
+    if (seedKey === 'applyhome-cmpet' || seedKey === 'applyhome-stat') {
+      return 'qdrant';
+    }
+    return 'neo4j';
+  }
+
+  private parseDateValue(value: unknown): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    if (/^\d{8}$/.test(raw)) {
+      const normalized = `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T00:00:00+09:00`;
+      const parsed = new Date(normalized);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private normalizeDateLabel(value: unknown): string | null {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    if (/^\d{8}$/.test(raw)) {
+      return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+      return raw.slice(0, 10);
+    }
+
+    const parsed = this.parseDateValue(raw);
+    return parsed ? parsed.toISOString().slice(0, 10) : raw;
+  }
+
+  private toNumberOrNull(value: unknown): number | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'object' && value !== null && 'toNumber' in value) {
+      return (value as { toNumber: () => number }).toNumber();
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 }

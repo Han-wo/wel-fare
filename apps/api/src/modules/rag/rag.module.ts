@@ -15,7 +15,9 @@ import { VectorRetrievalService } from './vector-retrieval.service';
 import { PolicyGraphService } from './policy-graph.service';
 import { HousingGraphService } from './housing-graph.service';
 import { SuggestionService } from './suggestion.service';
+import { HitlSuggestionService } from './hitl-suggestion.service';
 import { NEO4J_DRIVER } from './rag.tokens';
+import { RagThinkingStreamService } from './rag-thinking-stream.service';
 import { UserProfile } from '../profile/entities/user-profile.entity';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
@@ -51,11 +53,13 @@ import { RagCacheService } from './rag-cache.service';
     RetrieverServices,
     QueryAnalysisService,
     StreamingService,
+    RagThinkingStreamService,
     RagCacheService,
     VectorRetrievalService,
     PolicyGraphService,
     HousingGraphService,
     SuggestionService,
+    HitlSuggestionService,
   ],
 })
 export class RagModule {}

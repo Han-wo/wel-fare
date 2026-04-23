@@ -1,9 +1,14 @@
-import { Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe, Post, Query, Sse, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DataSyncService } from './data-sync.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { Observable } from 'rxjs';
+
+interface MessageEvent {
+  data: string;
+}
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -60,6 +65,40 @@ export class DataSyncController {
     return this.dataSyncService.getRunProgress(runId);
   }
 
+  @Sse('sync/stream')
+  @ApiOperation({ summary: '특정 동기화 run 진행도 스트리밍 (SSE)' })
+  streamRunProgress(@Query('runId') runId: string): Observable<MessageEvent> {
+    return new Observable((subscriber) => {
+      let closed = false;
+
+      const push = async () => {
+        if (closed) return;
+
+        const progress = await this.dataSyncService.getRunProgress(runId).catch(() => null);
+        if (!progress) {
+          subscriber.complete();
+          return;
+        }
+
+        subscriber.next({ data: JSON.stringify(progress) });
+
+        if (!progress.isActive && progress.status !== 'RUNNING') {
+          subscriber.complete();
+        }
+      };
+
+      void push();
+      const timer = setInterval(() => {
+        void push();
+      }, 1200);
+
+      return () => {
+        closed = true;
+        clearInterval(timer);
+      };
+    });
+  }
+
   @Get('sync/sources')
   @ApiOperation({ summary: '동기화 가능한 데이터 소스 목록 조회' })
   getSyncSources() {
@@ -70,6 +109,12 @@ export class DataSyncController {
   @ApiOperation({ summary: '데이터 소스별 최신 동기화 상태 조회' })
   getSourceStatuses() {
     return this.dataSyncService.getSourceStatuses();
+  }
+
+  @Get('freshness')
+  @ApiOperation({ summary: '실제 적재 데이터 기준 소스별 최신성 조회' })
+  getFreshness() {
+    return this.dataSyncService.getFreshnessSnapshots();
   }
 
   @Post('sync/seeds/:key')

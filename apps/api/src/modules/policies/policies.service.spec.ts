@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import type { Repository } from 'typeorm';
+import { Brackets, type Repository } from 'typeorm';
 import { PoliciesService } from './policies.service';
 import { Policy } from './entities/policy.entity';
 
@@ -33,6 +33,36 @@ describe('PoliciesService', () => {
     );
     expect(queryBuilder.orderBy).toHaveBeenCalledWith('p.syncedAt', 'DESC');
     expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('p.createdAt', 'DESC');
+  });
+
+  it('supports broad category groups and text search', async () => {
+    const queryBuilder = createQueryBuilderMock();
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    } as unknown as Repository<Policy>;
+    const service = new PoliciesService(repo);
+
+    await service.findAll({ categoryGroup: 'FINANCE', q: '청년' });
+
+    expect(
+      queryBuilder.andWhere.mock.calls.some((call: unknown[]) => call[0] instanceof Brackets),
+    ).toBe(true);
+  });
+
+  it('sorts by nearest deadline with open-ended policies last', async () => {
+    const queryBuilder = createQueryBuilderMock();
+    const repo = {
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    } as unknown as Repository<Policy>;
+    const service = new PoliciesService(repo);
+
+    await service.findAll({ sort: 'deadline' });
+
+    expect(queryBuilder.orderBy).toHaveBeenCalledWith(
+      'CASE WHEN p.applicationEnd IS NULL THEN 1 ELSE 0 END',
+      'ASC',
+    );
+    expect(queryBuilder.addOrderBy).toHaveBeenCalledWith('p.applicationEnd', 'ASC');
   });
 
   it('searches targetSummary instead of the old snake_case column name', async () => {

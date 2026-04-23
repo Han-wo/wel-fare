@@ -18,6 +18,10 @@ import type {
   RetrievalResult,
 } from './retrieval.types';
 import { toStructuredToolPayload } from './retrieval.types';
+import type { RagThinkPayload } from './thinking.types';
+import type { HitlQuestionnaire } from './hitl.types';
+import type { HitlSuggestionService } from './hitl-suggestion.service';
+import { detectAnswerNeedsHitl } from './hitl-detection';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -33,6 +37,7 @@ const GraphState = Annotation.Root({
   profile: Annotation<UserProfile | null>(),
   answer: Annotation<string>(),
   streamCallback: Annotation<((token: string) => void) | null>(),
+  hitlCallback: Annotation<((payload: HitlQuestionnaire) => void) | null>(),
 });
 
 type GraphStateType = typeof GraphState.State;
@@ -41,6 +46,10 @@ export interface RagGraphServices {
   queryAnalysis: Pick<
     QueryAnalysisService,
     'resolveSearchPreRoute' | 'getClarificationRequest' | 'selectApplicationSources'
+  >;
+  hitlSuggestion: Pick<
+    HitlSuggestionService,
+    'buildMissingFieldQuestionnaire' | 'buildRecoveryQuestionnaire'
   >;
   getProfile: (userId: string) => Promise<UserProfile | null>;
   searchWelfare: (question: string, userId: string, traceId?: string) => Promise<RetrievalResult>;
@@ -95,6 +104,7 @@ export interface RagGraphServices {
       detail: string;
     },
   ) => void;
+  emitThink: (traceId: string, input: RagThinkPayload) => void;
   calcAge: (birthDate: string) => number;
   getSidoName: (code: string) => string;
 }
@@ -104,6 +114,11 @@ function serializeToolPayload(result: RetrievalResult | EligibilityRetrievalResu
 }
 
 export function createRagGraph(services: RagGraphServices) {
+  const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
+    if (!traceId) return;
+    services.emitThink(traceId, input);
+  };
+
   const llm = new ChatOpenAI({
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
@@ -119,7 +134,22 @@ export function createRagGraph(services: RagGraphServices) {
       question: string;
       userId: string;
       traceId: string | null;
-    }) => serializeToolPayload(await services.searchWelfare(question, userId, traceId ?? undefined)),
+    }) => {
+      emitThink(traceId, {
+        phase: '복지 검색',
+        content: '일반 복지 정책과 지원 제도를 검색하는 중입니다.',
+        node: 'search_welfare',
+        status: 'active',
+      });
+      const result = await services.searchWelfare(question, userId, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '복지 검색',
+        content: `${result.summary} 관련 근거를 정리했습니다.`,
+        node: 'search_welfare',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'search_welfare',
       description:
@@ -133,8 +163,22 @@ export function createRagGraph(services: RagGraphServices) {
   );
 
   const searchYouthPolicy = tool(
-    async ({ question, traceId }: { question: string; traceId: string | null }) =>
-      serializeToolPayload(await services.searchYouthPolicies(question, traceId ?? undefined)),
+    async ({ question, traceId }: { question: string; traceId: string | null }) => {
+      emitThink(traceId, {
+        phase: '청년정책 검색',
+        content: '청년 전용 정책과 지원 제도를 찾는 중입니다.',
+        node: 'search_youth_policy',
+        status: 'active',
+      });
+      const result = await services.searchYouthPolicies(question, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '청년정책 검색',
+        content: `${result.summary} 청년정책 후보를 정리했습니다.`,
+        node: 'search_youth_policy',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'search_youth_policy',
       description:
@@ -155,8 +199,22 @@ export function createRagGraph(services: RagGraphServices) {
       question: string;
       userId: string;
       traceId: string | null;
-    }) =>
-      serializeToolPayload(await services.searchHousingSubscriptions(question, userId, traceId ?? undefined)),
+    }) => {
+      emitThink(traceId, {
+        phase: '청약 공고 검색',
+        content: '청약홈과 공공주택 공고에서 관련 일정을 찾는 중입니다.',
+        node: 'search_housing_subscription',
+        status: 'active',
+      });
+      const result = await services.searchHousingSubscriptions(question, userId, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '청약 공고 검색',
+        content: `${result.summary} 청약 공고 근거를 정리했습니다.`,
+        node: 'search_housing_subscription',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'search_housing_subscription',
       description:
@@ -178,7 +236,22 @@ export function createRagGraph(services: RagGraphServices) {
       question: string;
       userId: string;
       traceId: string | null;
-    }) => serializeToolPayload(await services.searchRentalSupport(question, userId, traceId ?? undefined)),
+    }) => {
+      emitThink(traceId, {
+        phase: '주거 지원 검색',
+        content: '임대주택과 전월세 지원 제도를 찾는 중입니다.',
+        node: 'search_rental_support',
+        status: 'active',
+      });
+      const result = await services.searchRentalSupport(question, userId, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '주거 지원 검색',
+        content: `${result.summary} 주거 지원 후보를 정리했습니다.`,
+        node: 'search_rental_support',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'search_rental_support',
       description:
@@ -202,10 +275,27 @@ export function createRagGraph(services: RagGraphServices) {
       facility_type: string;
       userId: string;
       traceId: string | null;
-    }) =>
-      serializeToolPayload(
-        await services.searchWelfareFacilities(question, facility_type, userId, traceId ?? undefined),
-      ),
+    }) => {
+      emitThink(traceId, {
+        phase: '복지시설 검색',
+        content: '가까운 시설과 관련 복지기관을 찾는 중입니다.',
+        node: 'search_welfare_facility',
+        status: 'active',
+      });
+      const result = await services.searchWelfareFacilities(
+        question,
+        facility_type,
+        userId,
+        traceId ?? undefined,
+      );
+      emitThink(traceId, {
+        phase: '복지시설 검색',
+        content: `${result.summary} 시설 후보를 정리했습니다.`,
+        node: 'search_welfare_facility',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'search_welfare_facility',
       description:
@@ -228,7 +318,22 @@ export function createRagGraph(services: RagGraphServices) {
       policy_name: string;
       userId: string;
       traceId: string | null;
-    }) => serializeToolPayload(await services.searchPolicyEligibility(policy_name, userId, traceId ?? undefined)),
+    }) => {
+      emitThink(traceId, {
+        phase: '자격 확인',
+        content: '정책 조건과 사용자 정보를 비교하는 중입니다.',
+        node: 'check_policy_eligibility',
+        status: 'active',
+      });
+      const result = await services.searchPolicyEligibility(policy_name, userId, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '자격 확인',
+        content: `${result.summary} 자격 판단 근거를 정리했습니다.`,
+        node: 'check_policy_eligibility',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'check_policy_eligibility',
       description:
@@ -250,7 +355,22 @@ export function createRagGraph(services: RagGraphServices) {
       userId: string;
       days_ahead: number;
       traceId: string | null;
-    }) => serializeToolPayload(await services.getUpcomingDeadlines(userId, days_ahead, traceId ?? undefined)),
+    }) => {
+      emitThink(traceId, {
+        phase: '마감 일정 조회',
+        content: `향후 ${days_ahead}일 기준으로 접수 중이거나 임박한 공고를 찾는 중입니다.`,
+        node: 'get_upcoming_deadlines',
+        status: 'active',
+      });
+      const result = await services.getUpcomingDeadlines(userId, days_ahead, traceId ?? undefined);
+      emitThink(traceId, {
+        phase: '마감 일정 조회',
+        content: `${result.summary} 일정 결과를 정리했습니다.`,
+        node: 'get_upcoming_deadlines',
+        status: 'done',
+      });
+      return serializeToolPayload(result);
+    },
     {
       name: 'get_upcoming_deadlines',
       description:
@@ -276,6 +396,12 @@ export function createRagGraph(services: RagGraphServices) {
   const llmWithTools = llm.bindTools(tools);
 
   function preRoute(state: GraphStateType): Partial<GraphStateType> {
+    emitThink(state.traceId, {
+      phase: '도구 선택',
+      content: '질문에 맞는 검색 도구를 미리 선택하는 중입니다.',
+      node: 'pre_route',
+      status: 'active',
+    });
     const decision = services.queryAnalysis.resolveSearchPreRoute({
       question: state.question,
       userId: state.userId,
@@ -299,6 +425,13 @@ export function createRagGraph(services: RagGraphServices) {
       detail: decision.detail,
     });
 
+    emitThink(state.traceId, {
+      phase: '도구 선택',
+      content: decision.detail,
+      node: decision.toolName,
+      status: 'done',
+    });
+
     return { messages: [new AIMessage({ content: '', tool_calls: [toolCall] })] };
   }
 
@@ -308,6 +441,12 @@ export function createRagGraph(services: RagGraphServices) {
   }
 
   async function loadContext(state: GraphStateType): Promise<Partial<GraphStateType>> {
+    emitThink(state.traceId, {
+      phase: '컨텍스트 로드',
+      content: '이전 대화와 프로필을 불러오는 중입니다.',
+      node: 'load_context',
+      status: 'active',
+    });
     const [profile, rawHistory] = await Promise.all([
       services.getProfile(state.userId),
       services.loadHistory(state.sessionId),
@@ -382,6 +521,13 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
         : null,
     });
 
+    emitThink(state.traceId, {
+      phase: '컨텍스트 로드',
+      content: `이전 대화 ${rawHistory.length}개와 프로필 정보를 반영했습니다.`,
+      node: 'load_context',
+      status: 'done',
+    });
+
     return {
       profile,
       messages: [new SystemMessage(systemPrompt), ...historyMessages, new HumanMessage(state.question)],
@@ -389,6 +535,12 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
   }
 
   async function requestMissingInfo(state: GraphStateType): Promise<Partial<GraphStateType>> {
+    emitThink(state.traceId, {
+      phase: '질문 점검',
+      content: '질문에 필요한 정보가 충분한지 확인하는 중입니다.',
+      node: 'request_missing_info',
+      status: 'active',
+    });
     const clarification = services.queryAnalysis.getClarificationRequest({
       routeType: 'SEARCH',
       question: state.question,
@@ -396,6 +548,12 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     });
 
     if (!clarification) {
+      emitThink(state.traceId, {
+        phase: '질문 점검',
+        content: '추가 정보 없이 바로 검색을 진행할 수 있습니다.',
+        node: 'request_missing_info',
+        status: 'done',
+      });
       return {};
     }
 
@@ -410,7 +568,21 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
       },
     });
 
+    const questionnaire = await services.hitlSuggestion.buildMissingFieldQuestionnaire({
+      missingFields: clarification.missingFields,
+      question: state.question,
+      profile: state.profile,
+    });
+
+    state.hitlCallback?.(questionnaire);
     state.streamCallback?.(clarification.prompt);
+
+    emitThink(state.traceId, {
+      phase: '추가 정보 요청',
+      content: clarification.detail,
+      node: 'request_missing_info',
+      status: 'done',
+    });
 
     return {
       messages: [new AIMessage(clarification.prompt)],
@@ -426,6 +598,12 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     state: GraphStateType,
     config?: RunnableConfig,
   ): Promise<Partial<GraphStateType>> {
+    emitThink(state.traceId, {
+      phase: '답변 전략 수립',
+      content: '질문을 바탕으로 답변 전략과 도구 호출 여부를 판단하는 중입니다.',
+      node: 'agent',
+      status: 'active',
+    });
     const stream = await llmWithTools.stream(state.messages, {
       ...config,
       runName: 'welfare-react-agent',
@@ -472,6 +650,15 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
       });
     }
 
+    emitThink(state.traceId, {
+      phase: '답변 전략 수립',
+      content: finalMessage.tool_calls?.length
+        ? '관련 도구를 선택해 근거를 더 수집하고 있습니다.'
+        : '바로 답변 초안을 생성하고 있습니다.',
+      node: 'agent',
+      status: 'done',
+    });
+
     return {
       messages: [finalMessage],
       ...(textAccumulated ? { answer: textAccumulated } : {}),
@@ -483,6 +670,42 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     const lastMessage = state.messages[state.messages.length - 1];
     if ((lastMessage as AIMessage).tool_calls?.length) return 'tools';
     return 'save_message';
+  }
+
+  async function verifyAnswer(state: GraphStateType): Promise<Partial<GraphStateType>> {
+    const detection = detectAnswerNeedsHitl(state.answer);
+    if (!detection.needsHitl) return {};
+
+    emitThink(state.traceId, {
+      phase: 'HITL 재질문 판단',
+      content: `답변이 ${detection.reason} 형태로 감지되어 선택형 재질문으로 전환합니다.`,
+      node: 'verify_answer',
+      status: 'active',
+    });
+
+    const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+      question: state.question,
+      profile: state.profile,
+      retrieval: null,
+    });
+
+    state.hitlCallback?.(questionnaire);
+
+    services.recordEvent(state.traceId, {
+      type: 'decision',
+      title: '답변 후 HITL 전환',
+      detail: questionnaire.detail,
+      payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
+    });
+
+    emitThink(state.traceId, {
+      phase: 'HITL 재질문 판단',
+      content: '선택형 질문을 전송했습니다.',
+      node: 'verify_answer',
+      status: 'done',
+    });
+
+    return {};
   }
 
   async function saveMessage(state: GraphStateType): Promise<Partial<GraphStateType>> {
@@ -498,6 +721,7 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     .addNode('pre_route', preRoute)
     .addNode('agent', agentNode)
     .addNode('tools', toolNode)
+    .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
@@ -511,9 +735,10 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     })
     .addConditionalEdges('agent', shouldContinue, {
       tools: 'tools',
-      save_message: 'save_message',
+      save_message: 'verify_answer',
     })
     .addEdge('tools', 'agent')
+    .addEdge('verify_answer', 'save_message')
     .addEdge('save_message', END)
     .compile();
 }

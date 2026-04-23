@@ -3,6 +3,8 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RagService, RagStreamEvent } from './rag.service';
+import type { RagThinkPayload } from './thinking.types';
+import type { HitlQuestionnaire } from './hitl.types';
 
 interface MessageEvent {
   data: string;
@@ -11,7 +13,9 @@ interface MessageEvent {
 type StreamPayload =
   | { eventType: 'SESSION_CREATED'; sessionId: string }
   | { eventType: 'THINK' }
+  | { eventType: 'THINK_DETAIL'; payload: RagThinkPayload }
   | { eventType: 'TOKEN'; content: string }
+  | { eventType: 'HITL'; payload: HitlQuestionnaire }
   | { eventType: 'DONE' };
 
 function toStreamPayload(event: RagStreamEvent): StreamPayload {
@@ -23,8 +27,16 @@ function toStreamPayload(event: RagStreamEvent): StreamPayload {
     return { eventType: 'THINK' };
   }
 
+  if (event.type === 'think_detail') {
+    return { eventType: 'THINK_DETAIL', payload: event.data };
+  }
+
   if (event.type === 'text') {
     return { eventType: 'TOKEN', content: event.data };
+  }
+
+  if (event.type === 'hitl') {
+    return { eventType: 'HITL', payload: event.data };
   }
 
   return { eventType: 'DONE' };

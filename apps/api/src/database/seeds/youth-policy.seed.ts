@@ -7,6 +7,8 @@
  * Point ID offset: 1_500_000_000 (기존 시더와 충돌 없는 구간)
  */
 import axios from 'axios';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
@@ -30,6 +32,10 @@ const EMBED_BATCH = 20;
 const POINT_OFFSET = 1_500_000_000;
 const QDRANT_LOOKUP_BATCH = 50;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
+const publicApiClient = axios.create({
+  httpAgent: new http.Agent({ keepAlive: false }),
+  httpsAgent: new https.Agent({ keepAlive: false }),
+});
 
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL ?? 'http://localhost:6333',
@@ -82,7 +88,16 @@ function sleep(ms: number) {
 }
 
 function isRetryableRequestError(error: unknown) {
-  return axios.isAxiosError(error) && ((error.response?.status ?? 0) >= 500 || error.response?.status === 429);
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status ?? 0;
+  const errorCode = error.response?.data?.errorCode;
+  return (
+    status === 429 ||
+    status >= 500 ||
+    !error.response ||
+    errorCode === 'e002' ||
+    ['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error.code ?? '')
+  );
 }
 
 async function withRetry<T>(task: () => Promise<T>, attempts = 4, baseDelayMs = 1000): Promise<T> {
@@ -257,7 +272,7 @@ async function fetchYouthPolicies(
   pageNum: number,
 ): Promise<{ totalCount: number; list: YouthPolicy[] }> {
   const { data } = await withRetry(() =>
-    axios.get(YOUTH_BASE_URL, {
+    publicApiClient.get(YOUTH_BASE_URL, {
       params: {
         apiKeyNm: YOUTH_API_KEY,
         pageNum,

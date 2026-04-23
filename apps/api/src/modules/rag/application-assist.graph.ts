@@ -12,6 +12,31 @@ import type { UserProfile } from '@welfare-ai/shared-types';
 import { calcAge, getSidoName } from '@welfare-ai/shared-utils';
 import { combineRetrievalPromptBlocks, type RetrievalResult } from './retrieval.types';
 import { type RagGraphServices } from './rag.graph';
+import type { RagThinkPayload } from './thinking.types';
+import { detectAnswerNeedsHitl } from './hitl-detection';
+
+const APPLICATION_RETRIEVAL_MIN_AVG_SCORE = 0.35;
+
+function combineRetrievalSummary(results: RetrievalResult[]): RetrievalResult | null {
+  if (results.length === 0) return null;
+  const items = results.flatMap((result) => result.items);
+  return {
+    source: results[0]?.source ?? 'combined',
+    query: results[0]?.query ?? '',
+    summary: `결합 후보 ${items.length}건`,
+    items,
+  } as RetrievalResult;
+}
+
+function isResultsInsufficient(result: RetrievalResult | null): boolean {
+  if (!result || result.items.length === 0) return true;
+  const scores = result.items
+    .map((item) => item.score ?? null)
+    .filter((score): score is number => typeof score === 'number');
+  if (scores.length === 0) return false;
+  const avg = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  return avg < APPLICATION_RETRIEVAL_MIN_AVG_SCORE;
+}
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -25,6 +50,7 @@ const GraphState = Annotation.Root({
   profile: Annotation<UserProfile | null>(),
   answer: Annotation<string>(),
   streamCallback: Annotation<((token: string) => void) | null>(),
+  hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
   applicationContext: Annotation<string>(),
 });
 
@@ -103,12 +129,23 @@ async function streamAnswer(
 }
 
 export function createApplicationAssistGraph(services: RagGraphServices) {
+  const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
+    if (!traceId) return;
+    services.emitThink(traceId, input);
+  };
+
   const llm = new ChatOpenAI({
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
   });
 
   async function loadContext(state: ApplicationGraphState): Promise<Partial<ApplicationGraphState>> {
+    emitThink(state.traceId, {
+      phase: '컨텍스트 로드',
+      content: '이전 대화와 프로필을 불러오는 중입니다.',
+      node: 'load_context',
+      status: 'active',
+    });
     const [profile, rawHistory] = await Promise.all([
       services.getProfile(state.userId),
       services.loadHistory(state.sessionId),
@@ -140,6 +177,12 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
   async function requestMissingInfo(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
+    emitThink(state.traceId, {
+      phase: '질문 점검',
+      content: '신청 도움에 필요한 정보가 충분한지 확인하는 중입니다.',
+      node: 'request_missing_info',
+      status: 'active',
+    });
     const clarification = services.queryAnalysis.getClarificationRequest({
       routeType: 'APPLICATION_ASSIST',
       question: state.question,
@@ -147,6 +190,12 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     });
 
     if (!clarification) {
+      emitThink(state.traceId, {
+        phase: '질문 점검',
+        content: '바로 신청 도움 절차를 정리할 수 있습니다.',
+        node: 'request_missing_info',
+        status: 'done',
+      });
       return {};
     }
 
@@ -161,7 +210,21 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       },
     });
 
+    const questionnaire = await services.hitlSuggestion.buildMissingFieldQuestionnaire({
+      missingFields: clarification.missingFields,
+      question: state.question,
+      profile: state.profile,
+    });
+
+    state.hitlCallback?.(questionnaire);
     state.streamCallback?.(clarification.prompt);
+
+    emitThink(state.traceId, {
+      phase: '추가 정보 요청',
+      content: clarification.detail,
+      node: 'request_missing_info',
+      status: 'done',
+    });
 
     return {
       messages: [new AIMessage(clarification.prompt)],
@@ -172,6 +235,12 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
   async function collectApplicationContext(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
+    emitThink(state.traceId, {
+      phase: '신청 자료 수집',
+      content: '질문 유형에 맞는 정책 자료와 신청 근거를 수집하는 중입니다.',
+      node: 'collect_application_context',
+      status: 'active',
+    });
     const selectedSources = services.queryAnalysis.selectApplicationSources({
       question: state.question,
       hasProfile: Boolean(state.profile),
@@ -224,17 +293,77 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       payload: { selectedSources, documentCount },
     });
 
+    emitThink(state.traceId, {
+      phase: '신청 자료 수집',
+      content: `${selectedSources.join(', ')} 기준으로 신청 자료 ${documentCount}건을 정리했습니다.`,
+      node: 'collect_application_context',
+      status: 'done',
+    });
+
+    const combined = combineRetrievalSummary(results);
+    if (isResultsInsufficient(combined)) {
+      const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+        question: state.question,
+        profile: state.profile,
+        retrieval: combined,
+      });
+      state.hitlCallback?.(questionnaire);
+      const message = '신청 방법을 정리할 근거가 부족해, 어떤 분야를 알아보시는지 먼저 확인하고 싶어요.';
+      state.streamCallback?.(message);
+
+      return {
+        applicationContext: contextText,
+        messages: [new AIMessage(message)],
+        answer: message,
+      };
+    }
+
     return {
       applicationContext: contextText,
       messages: [new HumanMessage(contextText)],
     };
   }
 
+  function routeAfterContext(
+    state: ApplicationGraphState,
+  ): 'generate_answer' | 'save_message' {
+    return state.answer ? 'save_message' : 'generate_answer';
+  }
+
   async function generateAnswer(
     state: ApplicationGraphState,
     config?: RunnableConfig,
   ): Promise<Partial<ApplicationGraphState>> {
+    emitThink(state.traceId, {
+      phase: '답변 작성',
+      content: '신청 순서와 준비사항을 정리하는 중입니다.',
+      node: 'generate_answer',
+      status: 'active',
+    });
     return streamAnswer(llm, state, config);
+  }
+
+  async function verifyAnswer(
+    state: ApplicationGraphState,
+  ): Promise<Partial<ApplicationGraphState>> {
+    const detection = detectAnswerNeedsHitl(state.answer);
+    if (!detection.needsHitl) return {};
+
+    const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+      question: state.question,
+      profile: state.profile,
+      retrieval: null,
+    });
+    state.hitlCallback?.(questionnaire);
+
+    services.recordEvent(state.traceId, {
+      type: 'decision',
+      title: '답변 후 HITL 전환',
+      detail: questionnaire.detail,
+      payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
+    });
+
+    return {};
   }
 
   async function saveMessage(state: ApplicationGraphState): Promise<Partial<ApplicationGraphState>> {
@@ -255,6 +384,7 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     .addNode('request_missing_info', requestMissingInfo)
     .addNode('collect_application_context', collectApplicationContext)
     .addNode('generate_answer', generateAnswer)
+    .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
@@ -262,8 +392,12 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       collect_application_context: 'collect_application_context',
       save_message: 'save_message',
     })
-    .addEdge('collect_application_context', 'generate_answer')
-    .addEdge('generate_answer', 'save_message')
+    .addConditionalEdges('collect_application_context', routeAfterContext, {
+      generate_answer: 'generate_answer',
+      save_message: 'save_message',
+    })
+    .addEdge('generate_answer', 'verify_answer')
+    .addEdge('verify_answer', 'save_message')
     .addEdge('save_message', END)
     .compile();
 }

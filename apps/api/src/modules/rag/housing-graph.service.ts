@@ -9,6 +9,10 @@ import { RagCacheService } from './rag-cache.service';
 const HOUSING_GRAPH_CACHE_TTL_SECONDS = 60 * 10;
 const UPCOMING_DEADLINES_CACHE_TTL_SECONDS = 60 * 5;
 
+function formatCompactDate(date: Date) {
+  return date.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 @Injectable()
 export class HousingGraphService {
   private readonly logger = new Logger(HousingGraphService.name);
@@ -20,10 +24,11 @@ export class HousingGraphService {
   ) {}
 
   async fetchHousingAnnouncements(sidoCode: string, traceId?: string): Promise<RetrievalItem[]> {
+    const today = formatCompactDate(new Date());
     try {
       const { value, hit } = await this.ragCache.getOrLoad<RetrievalItem[]>({
         namespace: 'graph:housing-announcements',
-        keyParts: [sidoCode],
+        keyParts: [sidoCode, today],
         ttlSeconds: HOUSING_GRAPH_CACHE_TTL_SECONDS,
         dataVersionScope: 'housing_subscription',
         loader: async () => {
@@ -37,13 +42,22 @@ export class HousingGraphService {
               WHERE a.annoDate >= '2025'
               WITH a
               OPTIONAL MATCH (a)-[:AVAILABLE_IN]->(r:Region)
-              WITH a, collect(DISTINCT r.name) AS regionNames, collect(DISTINCT r.code) AS regionCodes
+              WITH a, collect(DISTINCT r.name) AS regionNames, collect(DISTINCT r.code) AS regionCodes,
+                replace(COALESCE(a.subscptBgnde, ''), '-', '') AS startDate,
+                replace(COALESCE(a.subscptEndde, ''), '-', '') AS endDate,
+                replace(COALESCE(a.annoDate, ''), '-', '') AS annoDate
               WHERE $sidoCode = '' OR $sidoCode IN regionCodes
-              RETURN a, regionNames
-              ORDER BY a.annoDate DESC
-              LIMIT 10
+              RETURN a, regionNames,
+                CASE
+                  WHEN startDate <> '' AND endDate <> '' AND startDate <= $today AND endDate >= $today THEN 0
+                  WHEN startDate <> '' AND startDate > $today THEN 1
+                  ELSE 2
+                END AS priority,
+                annoDate
+              ORDER BY priority ASC, annoDate DESC
+              LIMIT 20
               `,
-              { sidoCode },
+              { sidoCode, today },
             );
 
             for (const record of annoRes.records) {
@@ -189,12 +203,16 @@ export class HousingGraphService {
     daysAhead: number,
     traceId?: string,
   ): Promise<RetrievalItem[]> {
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const todayDate = new Date();
+    const today = formatCompactDate(todayDate);
+    const upperDate = formatCompactDate(
+      new Date(todayDate.getTime() + daysAhead * 24 * 60 * 60 * 1000),
+    );
 
     try {
       const { value, hit } = await this.ragCache.getOrLoad<RetrievalItem[]>({
         namespace: 'graph:upcoming-deadlines',
-        keyParts: [sidoCode, daysAhead, today],
+        keyParts: [sidoCode, daysAhead, today, upperDate],
         ttlSeconds: UPCOMING_DEADLINES_CACHE_TTL_SECONDS,
         dataVersionScope: 'housing_subscription',
         loader: async () => {
@@ -204,15 +222,22 @@ export class HousingGraphService {
               `
               MATCH (a:HousingAnnouncement)
               WHERE a.subscptBgnde IS NOT NULL AND a.subscptEndde IS NOT NULL
-                AND a.subscptBgnde <= $today AND a.subscptEndde >= $today
+                AND (
+                  (replace(a.subscptBgnde, '-', '') <= $today AND replace(a.subscptEndde, '-', '') >= $today)
+                  OR (replace(a.subscptBgnde, '-', '') > $today AND replace(a.subscptBgnde, '-', '') <= $upperDate)
+                )
               OPTIONAL MATCH (a)-[:AVAILABLE_IN]->(r:Region)
               WITH a, collect(DISTINCT r.name) AS regionNames, collect(DISTINCT r.code) AS regionCodes
               WHERE $sidoCode = '' OR $sidoCode IN regionCodes
-              RETURN a, regionNames
-              ORDER BY a.subscptEndde ASC
+              RETURN a, regionNames,
+                CASE
+                  WHEN replace(a.subscptBgnde, '-', '') <= $today AND replace(a.subscptEndde, '-', '') >= $today THEN 0
+                  ELSE 1
+                END AS priority
+              ORDER BY priority ASC, replace(a.subscptBgnde, '-', '') ASC, replace(a.subscptEndde, '-', '') ASC
               LIMIT 15
               `,
-              { today, sidoCode },
+              { today, upperDate, sidoCode },
             );
 
             const items = result.records.map((record) => {
@@ -235,7 +260,15 @@ export class HousingGraphService {
                 ]
                   .filter(Boolean)
                   .join('\n'),
-                metadata: { ...announcement, regionNames, daysAhead },
+                metadata: {
+                  ...announcement,
+                  regionNames,
+                  daysAhead,
+                  availability:
+                    announcement.subscptBgnde <= today && announcement.subscptEndde >= today
+                      ? 'open'
+                      : 'upcoming',
+                },
               };
             });
 
