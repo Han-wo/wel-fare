@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Bookmark as BookmarkIcon, Check, ExternalLink, FileText, Loader2 } from 'lucide-react';
 import { api } from '../../../../lib/api';
 import { TagPill } from '../../../../components/ui/tag-pill';
+import { Linkify } from '../../../../components/ui/linkify';
 import {
   type Policy,
   categoryLabel,
@@ -284,7 +285,7 @@ export default function PolicyDetailPage() {
                   whiteSpace: 'pre-wrap',
                 }}
               >
-                {policy.content}
+                <Linkify text={policy.content} />
               </p>
             </SectionBlock>
           )}
@@ -349,13 +350,24 @@ export default function PolicyDetailPage() {
                 background: 'var(--bg-subtle)',
                 border: '1px solid var(--border)',
                 borderRadius: 8,
+                flexWrap: 'wrap',
               }}
             >
               <FileText size={14} style={{ color: 'var(--text-muted)' }} />
               <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                {policy.source}
-                {policy.externalId && ` · ${policy.externalId}`}
-                {policy.contact && ` · 문의 ${policy.contact}`}
+                <Linkify text={policy.source} />
+                {policy.externalId && (
+                  <>
+                    {' · '}
+                    <Linkify text={policy.externalId} />
+                  </>
+                )}
+                {policy.contact && (
+                  <>
+                    {' · 문의 '}
+                    <Linkify text={policy.contact} />
+                  </>
+                )}
               </span>
             </div>
           </SectionBlock>

@@ -114,6 +114,7 @@ export default function ChatSessionPage() {
     thinkingAssistantId,
     activeHitl,
     dismissHitl,
+    submitHitlResponse,
     sendMessage,
   } = useChat(sessionId);
   const userName = useUserStore((s) => s.userName);
@@ -447,8 +448,7 @@ export default function ChatSessionPage() {
                   questionnaire={activeHitl}
                   onDismiss={dismissHitl}
                   onSubmit={(composed) => {
-                    dismissHitl();
-                    void sendMessage(composed);
+                    submitHitlResponse(composed);
                   }}
                 />
               </div>

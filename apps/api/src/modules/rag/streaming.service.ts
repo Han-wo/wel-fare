@@ -76,11 +76,7 @@ export class StreamingService {
     };
 
     const pushHitl = async (payload: HitlQuestionnaire) => {
-      this.logger.log(
-        `[HITL] push 시도 sessionId=${sessionId} id=${payload.id} reason=${payload.reason} questions=${payload.questions.length}`,
-      );
       if (await this.chatRuntime.isStreamClosed(sessionId, streamToken)) {
-        this.logger.warn(`[HITL] 스트림 종료로 drop sessionId=${sessionId}`);
         return;
       }
 

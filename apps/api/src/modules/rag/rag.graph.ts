@@ -36,6 +36,10 @@ const GraphState = Annotation.Root({
   traceId: Annotation<string>(),
   profile: Annotation<UserProfile | null>(),
   answer: Annotation<string>(),
+  skipSave: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
   streamCallback: Annotation<((token: string) => void) | null>(),
   hitlCallback: Annotation<((payload: HitlQuestionnaire) => void) | null>(),
 });
@@ -587,6 +591,7 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     return {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
+      skipSave: false,
     };
   }
 
@@ -630,7 +635,7 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
 
     if (chunks.length === 0) {
       const fallback = '응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.';
-      return { messages: [new AIMessage(fallback)], answer: fallback };
+      return { messages: [new AIMessage(fallback)], answer: fallback, skipSave: false };
     }
 
     const finalMessage = chunks.reduce((acc, chunk) => acc.concat(chunk));
@@ -661,6 +666,7 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
 
     return {
       messages: [finalMessage],
+      skipSave: false,
       ...(textAccumulated ? { answer: textAccumulated } : {}),
     };
   }
@@ -705,11 +711,11 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
       status: 'done',
     });
 
-    return {};
+    return { skipSave: true };
   }
 
   async function saveMessage(state: GraphStateType): Promise<Partial<GraphStateType>> {
-    if (state.sessionId && state.answer) {
+    if (state.sessionId && state.answer && !state.skipSave) {
       await services.saveMessage(state.sessionId, 'assistant', state.answer);
     }
     return {};

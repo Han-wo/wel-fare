@@ -33,6 +33,35 @@ export type HitlQuestionnaire = {
   questions: HitlQuestion[];
 };
 
+const readStoredHitl = (sessionId: string): HitlQuestionnaire | null => {
+  if (typeof window === 'undefined') return null;
+
+  const raw = window.sessionStorage.getItem(`hitl:${sessionId}`);
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw) as HitlQuestionnaire;
+  } catch {
+    window.sessionStorage.removeItem(`hitl:${sessionId}`);
+    return null;
+  }
+};
+
+const writeStoredHitl = (
+  sessionId: string,
+  questionnaire: HitlQuestionnaire | null,
+) => {
+  if (typeof window === 'undefined') return;
+
+  const key = `hitl:${sessionId}`;
+  if (!questionnaire) {
+    window.sessionStorage.removeItem(key);
+    return;
+  }
+
+  window.sessionStorage.setItem(key, JSON.stringify(questionnaire));
+};
+
 type StreamPayload =
   | { eventType: 'SESSION_CREATED'; sessionId: string }
   | { eventType: 'THINK' }
@@ -118,10 +147,16 @@ export function useChat(sessionId: string) {
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string | null>(null);
   const optimisticMessagesRef = useRef<ChatMessage[]>([]);
+  const pendingOutboundMessageRef = useRef<string | null>(null);
+  const isStreamingRef = useRef(false);
+  const isLoadingRef = useRef(true);
+  const sendMessageRef = useRef<(question: string) => Promise<void> | void>(() => undefined);
+  const skipNextHitlSyncRef = useRef(true);
 
   const resetStreamState = useCallback(() => {
     abortRef.current = null;
     assistantIdRef.current = null;
+    isStreamingRef.current = false;
     setIsStreaming(false);
     setIsThinking(false);
   }, []);
@@ -225,19 +260,43 @@ export function useChat(sessionId: string) {
 
   useEffect(() => {
     closeStream();
+    isLoadingRef.current = true;
     setIsLoading(true);
     setThinkingPhases([]);
     setThinkingAssistantId(null);
-    setActiveHitl(null);
+    skipNextHitlSyncRef.current = true;
+    setActiveHitl(readStoredHitl(sessionId));
     optimisticMessagesRef.current = [];
+    pendingOutboundMessageRef.current = null;
 
     api<ChatMessage[]>(`/chat/sessions/${sessionId}/messages`)
       .then((serverMessages) =>
         setMessages(mergeMessages(serverMessages, optimisticMessagesRef.current)),
       )
       .catch(() => setMessages([]))
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        isLoadingRef.current = false;
+        setIsLoading(false);
+      });
   }, [closeStream, sessionId]);
+
+  useEffect(() => {
+    if (skipNextHitlSyncRef.current) {
+      skipNextHitlSyncRef.current = false;
+      return;
+    }
+    writeStoredHitl(sessionId, activeHitl);
+  }, [activeHitl, sessionId]);
+
+  const flushPendingOutboundMessage = useCallback(() => {
+    const pending = pendingOutboundMessageRef.current?.trim();
+    if (!pending) return;
+
+    pendingOutboundMessageRef.current = null;
+    queueMicrotask(() => {
+      void sendMessageRef.current(pending);
+    });
+  }, []);
 
   useEffect(() => {
     void api(`/chat/sessions/${sessionId}/open`, { method: 'POST' }).catch(() => undefined);
@@ -260,7 +319,12 @@ export function useChat(sessionId: string) {
   const sendMessage = useCallback(
     async (question: string) => {
       const trimmed = question.trim();
-      if (!trimmed || isStreaming || isLoading) return;
+      if (!trimmed || isLoadingRef.current) return;
+
+      if (isStreamingRef.current) {
+        pendingOutboundMessageRef.current = trimmed;
+        return;
+      }
 
       closeStream();
 
@@ -286,6 +350,7 @@ export function useChat(sessionId: string) {
       ]);
       setThinkingAssistantId(null);
       setActiveHitl(null);
+      isStreamingRef.current = true;
       setIsStreaming(true);
       setIsThinking(true);
       emitChatSessionsUpdated();
@@ -322,6 +387,7 @@ export function useChat(sessionId: string) {
               finalizeThinking();
               resetStreamState();
               emitChatSessionsUpdated();
+              flushPendingOutboundMessage();
             },
             think: (payload) => {
               setIsThinking(true);
@@ -349,6 +415,7 @@ export function useChat(sessionId: string) {
           finalizeThinking();
           resetStreamState();
           emitChatSessionsUpdated();
+          flushPendingOutboundMessage();
         }
       } catch {
         if (!controller.signal.aborted) {
@@ -363,21 +430,33 @@ export function useChat(sessionId: string) {
       appendThinkPhase,
       closeStream,
       finalizeThinking,
-      isLoading,
-      isStreaming,
+      flushPendingOutboundMessage,
       resetStreamState,
       sessionId,
     ],
   );
 
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+
   const dismissHitl = useCallback(() => {
     setActiveHitl(null);
   }, []);
 
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.warn('[useChat] activeHitl change', activeHitl);
-  }, [activeHitl]);
+  const submitHitlResponse = useCallback((question: string) => {
+    const trimmed = question.trim();
+    if (!trimmed) return;
+
+    setActiveHitl(null);
+
+    if (isStreamingRef.current) {
+      pendingOutboundMessageRef.current = trimmed;
+      return;
+    }
+
+    void sendMessageRef.current(trimmed);
+  }, []);
 
   return {
     messages,
@@ -388,6 +467,7 @@ export function useChat(sessionId: string) {
     thinkingAssistantId,
     activeHitl,
     dismissHitl,
+    submitHitlResponse,
     sendMessage,
   };
 }
@@ -412,9 +492,6 @@ function handleStreamEvent(
   const payload = parseStreamPayload(event.data);
   if (!payload) return;
 
-  // eslint-disable-next-line no-console
-  console.warn('[stream]', payload.eventType);
-
   if (payload.eventType === 'SESSION_CREATED') {
     callbacks.onSessionCreated(payload.sessionId);
     return;
@@ -431,8 +508,6 @@ function handleStreamEvent(
   }
 
   if (payload.eventType === 'HITL') {
-    // eslint-disable-next-line no-console
-    console.warn('[HITL] received', payload.payload);
     callbacks.hitl(payload.payload);
     return;
   }

@@ -82,33 +82,21 @@ export class HitlSuggestionService {
         ? 'empty_retrieval'
         : 'low_relevance';
 
-    try {
-      const question = await this.buildCategoryQuestion(
-        input.question,
-        input.profile,
-        input.retrieval,
-      );
+    const question = await this.buildCategoryQuestion(
+      input.question,
+      input.profile,
+      input.retrieval,
+    );
 
-      this.logger.log(
-        `[HITL] recovery 생성 reason=${reason} choices=${question.choices.length}`,
-      );
-
-      return {
-        id: this.generateId('recovery'),
-        reason,
-        detail:
-          reason === 'empty_retrieval'
-            ? '검색 결과가 비어 있어 어떤 방향을 원하시는지 확인이 필요합니다.'
-            : '검색 결과의 관련도가 낮아 방향을 다시 확인하고 싶습니다.',
-        questions: [question],
-      };
-    } catch (error) {
-      this.logger.error(
-        `[HITL] recovery 생성 실패: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-      throw error;
-    }
+    return {
+      id: this.generateId('recovery'),
+      reason,
+      detail:
+        reason === 'empty_retrieval'
+          ? '검색 결과가 비어 있어 어떤 방향을 원하시는지 확인이 필요합니다.'
+          : '검색 결과의 관련도가 낮아 방향을 다시 확인하고 싶습니다.',
+      questions: [question],
+    };
   }
 
   private async buildMissingFieldQuestion(

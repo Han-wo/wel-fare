@@ -41,6 +41,10 @@ const GraphState = Annotation.Root({
   traceId: Annotation<string>(),
   profile: Annotation<UserProfile | null>(),
   answer: Annotation<string>(),
+  skipSave: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
   streamCallback: Annotation<((token: string) => void) | null>(),
   hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
   eligibilityContext: Annotation<string>(),
@@ -95,12 +99,13 @@ async function streamAnswer(
 
   if (chunks.length === 0) {
     const fallback = '적격 여부를 판단하지 못했습니다. 잠시 후 다시 시도해 주세요.';
-    return { messages: [new AIMessage(fallback)], answer: fallback };
+    return { messages: [new AIMessage(fallback)], answer: fallback, skipSave: false };
   }
 
   return {
     messages: [new AIMessage(answer)],
     answer,
+    skipSave: false,
   };
 }
 
@@ -205,6 +210,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
     return {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
+      skipSave: false,
     };
   }
 
@@ -272,6 +278,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
         eligibilityContext: contextText,
         messages: [new AIMessage(message)],
         answer: message,
+        skipSave: false,
       };
     }
 
@@ -320,11 +327,11 @@ export function createEligibilityGraph(services: RagGraphServices) {
       payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
     });
 
-    return {};
+    return { skipSave: true };
   }
 
   async function saveMessage(state: EligibilityGraphState): Promise<Partial<EligibilityGraphState>> {
-    if (state.sessionId && state.answer) {
+    if (state.sessionId && state.answer && !state.skipSave) {
       await services.saveMessage(state.sessionId, 'assistant', state.answer);
     }
     return {};

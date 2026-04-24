@@ -159,14 +159,7 @@ export function HitlPanel({
       .join(' · ');
   }, [answers]);
 
-  if (!current) {
-    // eslint-disable-next-line no-console
-    console.warn('[HitlPanel] no current question', { questionnaire, pageIndex, total });
-    return null;
-  }
-
-  // eslint-disable-next-line no-console
-  console.warn('[HitlPanel] render', { promptId: current.id, choices: current.choices.length });
+  if (!current) return null;
 
   return (
     <div
@@ -181,7 +174,7 @@ export function HitlPanel({
         minWidth: 0,
         maxWidth: 720,
         background: 'var(--bg-surface)',
-        border: '2px solid var(--accent, #2f6f63)',
+        border: '1px solid var(--border)',
         borderRadius: 16,
         boxShadow: 'var(--shadow)',
         outline: 'none',
