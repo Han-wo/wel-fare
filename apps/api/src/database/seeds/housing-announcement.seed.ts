@@ -6,9 +6,11 @@
  * 실행: ts-node -r dotenv/config --transpile-only src/database/seeds/housing-announcement.seed.ts
  */
 import axios from 'axios';
+import './http-agent'; // axios keepAlive 글로벌 적용
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 import { getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -20,7 +22,7 @@ import {
 const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://apis.data.go.kr/1613000/HWSPR02';
 const PAGE_SIZE = 1000; // 데이터 적어서 한 번에 수집
-const EMBED_BATCH = 50;
+const EMBED_BATCH = 100;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({
@@ -185,48 +187,51 @@ async function upsertToQdrant(items: PreparedAnnouncement[], embeddings: number[
   }
 }
 
-// ── Neo4j upsert (레코드별 오류 격리) ─────────────────────
+// ── Neo4j upsert (배치 UNWIND) ────────────────────────────
 async function upsertToNeo4j(items: PreparedAnnouncement[]): Promise<void> {
+  const rows = items
+    .filter(({ item: a }) => Boolean(a.pblancId))
+    .map(({ item: a, policyId: id, syncHash }) => {
+      const insttNm = a.suplyInsttNm ?? '';
+      return {
+        id,
+        name: a.pblancNm ?? '',
+        insttNm,
+        suplyTyNm: a.suplyTyNm ?? '',
+        houseTyNm: a.houseTyNm ?? '',
+        annoDate: a.rcritPblancDe ?? '',
+        annoType: a.type === 'rental' ? 'rental' : 'sale',
+        syncHash,
+        institutions: insttNm ? [insttNm] : [],
+      };
+    });
+  if (rows.length === 0) return;
+
   const session = neo4jDriver.session();
   try {
-    for (const { item: a, policyId: id, syncHash } of items) {
-      const name = a.pblancNm ?? '';
-      const insttNm = a.suplyInsttNm ?? '';
-      const suplyTyNm = a.suplyTyNm ?? '';
-      const houseTyNm = a.houseTyNm ?? '';
-      const annoType = a.type === 'rental' ? 'rental' : 'sale';
-      if (!a.pblancId) continue;
-      try {
-        await session.run(
-          `
-          MERGE (ann:HousingAnnouncement {id: $id})
-          SET ann.name = $name, ann.insttNm = $insttNm,
-              ann.suplyTyNm = $suplyTyNm, ann.houseTyNm = $houseTyNm,
-              ann.annoDate = $annoDate, ann.annoType = $annoType,
-              ann.source = 'myhome_announcement', ann.announcementSyncHash = $syncHash,
-              ann.updatedAt = datetime()
-          `,
-          {
-            id,
-            name,
-            insttNm,
-            suplyTyNm,
-            houseTyNm,
-            annoDate: a.rcritPblancDe ?? '',
-            annoType,
-            syncHash,
-          },
-        );
-        if (insttNm) {
-          await session.run(
-            `MERGE (inst:Institution {name: $name}) WITH inst MATCH (ann:HousingAnnouncement {id: $id}) MERGE (ann)-[:SUPPLIED_BY]->(inst)`,
-            { name: insttNm, id },
-          );
-        }
-      } catch (e) {
-        console.warn(`  Neo4j 스킵 [${id}]: ${(e as Error).message}`);
-      }
-    }
+    await session.run(
+      `
+      UNWIND $rows AS row
+      MERGE (ann:HousingAnnouncement {id: row.id})
+      SET ann.name = row.name,
+          ann.insttNm = row.insttNm,
+          ann.suplyTyNm = row.suplyTyNm,
+          ann.houseTyNm = row.houseTyNm,
+          ann.annoDate = row.annoDate,
+          ann.annoType = row.annoType,
+          ann.source = 'myhome_announcement',
+          ann.announcementSyncHash = row.syncHash,
+          ann.updatedAt = datetime()
+      WITH ann, row
+      FOREACH (instName IN row.institutions |
+        MERGE (inst:Institution {name: instName})
+        MERGE (ann)-[:SUPPLIED_BY]->(inst)
+      )
+      `,
+      { rows },
+    );
+  } catch (e) {
+    console.warn(`  Neo4j 배치 실패 (${rows.length}건): ${(e as Error).message}`);
   } finally {
     await session.close();
   }
@@ -235,6 +240,7 @@ async function upsertToNeo4j(items: PreparedAnnouncement[]): Promise<void> {
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('📢 공공주택 모집공고 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
 
   const [rentalItems, saleItems] = await Promise.all([
     fetchAnnouncements('rsdtRcritNtcList', 'rental'),

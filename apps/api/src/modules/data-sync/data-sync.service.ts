@@ -27,7 +27,8 @@ const SYNC_SEEDS = [
   { key: 'applyhome-stat', name: '청약 통계', script: 'applyhome-stat.seed.ts' },
 ] as const;
 
-const STALE_RUN_THRESHOLD_MS = 12 * 60 * 60 * 1000;
+const STALE_RUN_THRESHOLD_MS = 30 * 60 * 1000; // 30분 무응답 시 stale 처리
+const HEARTBEAT_INTERVAL_MS = 30 * 1000; // 자식 동작 중 30초마다 updatedAt 갱신
 
 type SyncSeedConfig = (typeof SYNC_SEEDS)[number];
 type SeedExecutionResult = {
@@ -632,8 +633,15 @@ export class DataSyncService {
         cwd: this.appDir,
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
+        // 별도 process group으로 띄워 dev-watch가 부모(API)에 SIGTERM을 보내도
+        // 자식 시드 프로세스에 전파되지 않게 한다. unref()로 부모 이벤트 루프와도 분리.
+        detached: true,
       },
     );
+    child.unref();
+    // pipe가 닫혔을 때 자식이 EPIPE로 죽지 않도록 error는 무시
+    child.stdout?.on('error', () => {});
+    child.stderr?.on('error', () => {});
 
     let stdout = '';
     let stderr = '';
@@ -679,6 +687,16 @@ export class DataSyncService {
       enqueuePersist();
     });
 
+    // 자식이 살아있는 동안 30초마다 updatedAt만 갱신 — fetch 페이지가 길어 stdout이
+    // 잠시 없는 구간에서도 stale 자동 정리가 발동하지 않도록 명시적 heartbeat.
+    const heartbeat = setInterval(() => {
+      this.logRepo
+        .query('UPDATE data_sync_logs SET "updatedAt" = NOW() WHERE id = $1', [log.id])
+        .catch((error) => {
+          this.logger.warn(`heartbeat 갱신 실패 [${seed.key}]: ${(error as Error).message}`);
+        });
+    }, HEARTBEAT_INTERVAL_MS);
+
     const exitCode = await new Promise<number>((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code) => resolve(code ?? 1));
@@ -688,6 +706,7 @@ export class DataSyncService {
       return 1;
     });
 
+    clearInterval(heartbeat);
     await persistQueue;
 
     const parsed = this.parseSeedOutput(stdout, stderr);

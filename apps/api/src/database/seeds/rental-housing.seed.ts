@@ -4,9 +4,11 @@
  * 실행: ts-node --transpile-only src/database/seeds/rental-housing.seed.ts
  */
 import axios from 'axios';
+import './http-agent'; // axios keepAlive 글로벌 적용
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 import { getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -18,7 +20,7 @@ import {
 const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const HOUSING_BASE_URL = 'https://apis.data.go.kr/1613000/HWSPR04';
 const PAGE_SIZE = 100;
-const EMBED_BATCH = 20;
+const EMBED_BATCH = 100;
 const CONCURRENCY = 10;       // 동시 API 요청 수
 const EMBED_CONCURRENCY = 2;  // 동시에 처리할 임베딩 배치 수
 const QDRANT_RETRY_LIMIT = 3;
@@ -522,45 +524,47 @@ async function upsertToQdrant(
   throw lastError;
 }
 
-// ── Neo4j upsert (레코드별 오류 격리) ────────────────────
+// ── Neo4j upsert (배치 UNWIND) ───────────────────────────
 async function upsertToNeo4j(complexes: PreparedHousingComplex[]): Promise<void> {
+  const rows = complexes
+    .filter(({ item: c }) => Boolean(c.hsmpSn))
+    .map(({ item: c, policyId: id, syncHash }) => ({
+      id,
+      name: c.hsmpNm ?? '',
+      address: c.rnAdres ?? '',
+      region: c.brtcNm ?? '',
+      sigungu: c.signguNm ?? '',
+      manager: c.insttNm ?? '',
+      hshldCo: c.hshldCo ?? 0,
+      syncHash,
+    }));
+  if (rows.length === 0) return;
+
   const session = neo4jDriver.session();
   try {
-    for (const { item: c, policyId: id, syncHash } of complexes) {
-      const name = c.hsmpNm ?? '';
-      const address = c.rnAdres ?? '';
-      const region = c.brtcNm ?? '';
-      const sigungu = c.signguNm ?? '';
-      const manager = c.insttNm ?? '';
-      if (!c.hsmpSn) continue;
-      try {
-        await session.run(
-          `
-          MERGE (h:HousingComplex {id: $id})
-          SET h.name = $name, h.address = $address, h.region = $region,
-              h.sigungu = $sigungu, h.manager = $manager, h.hshldCo = $hshldCo,
-              h.source = 'lh_housing', h.syncHash = $syncHash,
-              h.updatedAt = datetime()
-          `,
-          {
-            id,
-            name,
-            address,
-            region,
-            sigungu,
-            manager,
-            hshldCo: c.hshldCo ?? 0,
-            syncHash,
-          },
-        );
-        await session.run(
-          `MERGE (r:Region {name: $region}) WITH r MATCH (h:HousingComplex {id: $id}) MERGE (h)-[:LOCATED_IN]->(r)`,
-          { region, id },
-        );
-      } catch (e) {
-        console.warn(`  Neo4j 스킵 [${id}]: ${(e as Error).message}`);
-      }
-    }
+    await session.run(
+      `
+      UNWIND $rows AS row
+      MERGE (h:HousingComplex {id: row.id})
+      SET h.name = row.name,
+          h.address = row.address,
+          h.region = row.region,
+          h.sigungu = row.sigungu,
+          h.manager = row.manager,
+          h.hshldCo = row.hshldCo,
+          h.source = 'lh_housing',
+          h.syncHash = row.syncHash,
+          h.updatedAt = datetime()
+      WITH h, row
+      FOREACH (regionName IN CASE WHEN row.region <> '' THEN [row.region] ELSE [] END |
+        MERGE (r:Region {name: regionName})
+        MERGE (h)-[:LOCATED_IN]->(r)
+      )
+      `,
+      { rows },
+    );
+  } catch (e) {
+    console.warn(`  Neo4j 배치 실패 (${rows.length}건): ${(e as Error).message}`);
   } finally {
     await session.close();
   }
@@ -569,6 +573,7 @@ async function upsertToNeo4j(complexes: PreparedHousingComplex[]): Promise<void>
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('🏠 공공임대주택 단지정보 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
   console.log(`   대상: ${REGION_CODES.length}개 시군구`);
 
   const allComplexes: HousingComplex[] = [];

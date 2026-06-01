@@ -8,9 +8,11 @@
  * 실행: ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-cmpet.seed.ts
  */
 import axios from 'axios';
+import './http-agent'; // axios keepAlive 글로벌 적용
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 import { getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -21,7 +23,7 @@ import {
 const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://api.odcloud.kr/api/ApplyhomeInfoCmpetRtSvc/v1';
 const PER_PAGE = 1000;
-const EMBED_BATCH = 20;
+const EMBED_BATCH = 100;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({
@@ -298,6 +300,7 @@ async function fetchHouseNames(pblancNos: string[]): Promise<Map<string, string>
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('📊 청약홈 경쟁률 데이터 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
 
   const endpoints: Array<[string, string]> = [
     ['getAPTLttotPblancCmpet', 'apt'],

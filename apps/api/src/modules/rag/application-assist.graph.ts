@@ -55,6 +55,10 @@ const GraphState = Annotation.Root({
   }),
   streamCallback: Annotation<((token: string) => void) | null>(),
   hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
+  hitlMeta: Annotation<Record<string, unknown> | null>({
+    reducer: (_current, next) => next,
+    default: () => null,
+  }),
   applicationContext: Annotation<string>(),
 });
 
@@ -370,12 +374,25 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
     });
 
-    return { skipSave: true };
+    return {
+      hitlMeta: {
+        hitl: {
+          reason: detection.reason,
+          questionnaireId: questionnaire.id,
+          source: 'verify_answer',
+        },
+      },
+    };
   }
 
   async function saveMessage(state: ApplicationGraphState): Promise<Partial<ApplicationGraphState>> {
     if (state.sessionId && state.answer && !state.skipSave) {
-      await services.saveMessage(state.sessionId, 'assistant', state.answer);
+      await services.saveMessage(
+        state.sessionId,
+        'assistant',
+        state.answer,
+        state.hitlMeta ?? undefined,
+      );
     }
     return {};
   }

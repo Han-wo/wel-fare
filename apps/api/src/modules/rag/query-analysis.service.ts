@@ -44,14 +44,18 @@ const APPLICATION_ASSIST_INTENT =
 
 const CLEAR_YOUTH =
   /청년수당|청년적금|청년도약계좌|청년희망적금|온통청년|청년내일채움|청년취업지원금|청년창업지원금|청년 정책 뭐|청년 지원금/;
-const CLEAR_DEADLINE = /지금\s*신청\s*가능|현재\s*접수\s*중|마감\s*임박|신청\s*가능한\s*청약|오늘\s*청약/;
-const CLEAR_HOUSING_SUB = /청약홈\s*공고|분양\s*공고|행복주택\s*청약|국민임대\s*청약|청약\s*일정|청약\s*접수\s*기간/;
+const CLEAR_DEADLINE =
+  /지금\s*신청\s*가능|현재\s*접수\s*중|마감\s*임박|신청\s*가능한\s*청약|오늘\s*청약/;
+const CLEAR_HOUSING_SUB =
+  /청약홈\s*공고|분양\s*공고|행복주택\s*청약|국민임대\s*청약|청약\s*일정|청약\s*접수\s*기간/;
 const CLEAR_HOUSING_TIMELINE = /향후\s*(\d{1,2})\s*일|향후\s*공고|예정\s*공고|전체\s*청약정보/;
-const CLEAR_RENTAL = /주거급여\s*신청|버팀목\s*전세|전세자금\s*대출|월세\s*보조금|LH\s*임대단지|공공임대\s*입주/;
+const CLEAR_RENTAL =
+  /주거급여\s*신청|버팀목\s*전세|전세자금\s*대출|월세\s*보조금|LH\s*임대단지|공공임대\s*입주/;
 const CLEAR_FACILITY = /복지관\s*어디|시설\s*찾아|주간보호\s*센터|활동지원\s*기관|가까운\s*복지/;
 
 const YOUTH = /청년|청년도약|청년월세|온통청년|청년수당|청년희망|청년내일/i;
-const HOUSING = /주거|전세|월세|청약|임대|행복주택|국민임대|공공분양|신혼희망타운|버팀목|주거급여|LH/i;
+const HOUSING =
+  /주거|전세|월세|청약|임대|행복주택|국민임대|공공분양|신혼희망타운|버팀목|주거급여|LH/i;
 const FACILITY = /복지관|시설|센터|주간보호|활동지원 기관|정신건강/i;
 const DEADLINE = /지금\s*신청|현재\s*접수|마감\s*임박|오늘\s*청약|근처|가까운|지역/i;
 const PERSONALIZED = /내\s*조건|나한테|저한테|제가|추천|맞춤|받을 수|가능한|해당되는/i;
@@ -68,7 +72,9 @@ const SPECIFIC_PROGRAM =
 @Injectable()
 export class QueryAnalysisService {
   private extractDaysAhead(question: string) {
-    const match = question.match(/향후\s*(\d{1,2})\s*일|(\d{1,2})\s*일\s*기준|최대\s*(\d{1,2})\s*일/);
+    const match = question.match(
+      /향후\s*(\d{1,2})\s*일|(\d{1,2})\s*일\s*기준|최대\s*(\d{1,2})\s*일/,
+    );
     const raw = match?.slice(1).find(Boolean);
     const parsed = raw ? Number(raw) : NaN;
     if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 30) {
@@ -112,7 +118,10 @@ export class QueryAnalysisService {
         detail: '정규식 규칙이 질문을 get_upcoming_deadlines로 바로 라우팅했습니다.',
       };
     }
-    if (CLEAR_HOUSING_TIMELINE.test(q) && /청약|공고|분양|행복주택|국민임대|신혼희망타운/i.test(q)) {
+    if (
+      CLEAR_HOUSING_TIMELINE.test(q) &&
+      /청약|공고|분양|행복주택|국민임대|신혼희망타운/i.test(q)
+    ) {
       const daysAhead = this.extractDaysAhead(q);
       return {
         toolName: 'get_upcoming_deadlines',
@@ -152,16 +161,16 @@ export class QueryAnalysisService {
     return null;
   }
 
-  selectApplicationSources(input: {
-    question: string;
-    hasProfile: boolean;
-  }): ApplicationSource[] {
+  selectApplicationSources(input: { question: string; hasProfile: boolean }): ApplicationSource[] {
     const sources: ApplicationSource[] = [];
     const question = input.question;
 
     if (DEADLINE.test(question)) sources.push('deadline');
     if (YOUTH.test(question)) sources.push('youth');
-    if (CLEAR_HOUSING_SUB.test(question) || /청약|분양|행복주택|국민임대|공공분양|신혼희망타운/i.test(question)) {
+    if (
+      CLEAR_HOUSING_SUB.test(question) ||
+      /청약|분양|행복주택|국민임대|공공분양|신혼희망타운/i.test(question)
+    ) {
       sources.push('housing_subscription');
     }
     if (CLEAR_RENTAL.test(question) || HOUSING.test(question)) {
@@ -190,9 +199,11 @@ export class QueryAnalysisService {
       Boolean(profile?.sidoCode || profile?.sigunguCode || profile?.dongName) ||
       EXPLICIT_REGION.test(question);
     const hasAge = Boolean(profile?.birthDate) || EXPLICIT_AGE.test(question);
-    const hasIncome = Boolean(profile?.incomeBracket || profile?.annualIncome) || EXPLICIT_INCOME.test(question);
+    const hasIncome =
+      Boolean(profile?.incomeBracket || profile?.annualIncome) || EXPLICIT_INCOME.test(question);
     const hasHousing =
-      Boolean(profile?.isHomeowner !== undefined || profile?.householdType) || EXPLICIT_HOUSING.test(question);
+      Boolean(profile?.isHomeowner !== undefined || profile?.householdType) ||
+      EXPLICIT_HOUSING.test(question);
 
     const needsRegion = DEADLINE.test(question) || FACILITY.test(question);
     const needsAge = YOUTH.test(question);
@@ -241,7 +252,11 @@ export class QueryAnalysisService {
 
 function buildClarificationPrompt(fields: MissingField[]) {
   const lines = fields.map((field, index) => `${index + 1}. ${fieldQuestion(field)}`);
-  return ['정확하게 찾으려면 아래 정보가 더 필요합니다.', ...lines, '정보를 보내주시면 그 조건으로 바로 다시 찾아드릴게요.'].join('\n');
+  return [
+    '정확하게 찾으려면 아래 정보가 더 필요합니다.',
+    ...lines,
+    '정보를 보내주시면 그 조건으로 바로 다시 찾아드릴게요.',
+  ].join('\n');
 }
 
 function fieldLabel(field: MissingField) {

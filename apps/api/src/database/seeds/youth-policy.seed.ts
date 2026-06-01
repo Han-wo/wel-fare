@@ -12,6 +12,7 @@ import * as https from 'node:https';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 import { getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -28,13 +29,13 @@ import {
 const YOUTH_API_KEY = getRequiredEnv('YOUTH_CENTER_API_KEY');
 const YOUTH_BASE_URL = 'https://www.youthcenter.go.kr/go/ythip/getPlcy';
 const PAGE_SIZE = 100;
-const EMBED_BATCH = 20;
+const EMBED_BATCH = 100;
 const POINT_OFFSET = 1_500_000_000;
 const QDRANT_LOOKUP_BATCH = 50;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 const publicApiClient = axios.create({
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
+  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 16 }),
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 16 }),
 });
 
 const qdrant = new QdrantClient({
@@ -420,89 +421,54 @@ async function upsertToQdrant(
 
 // ── Neo4j upsert ─────────────────────────────────────────
 async function upsertToNeo4j(policies: PreparedYouthPolicy[]): Promise<void> {
+  if (policies.length === 0) return;
+  const rows = policies.map(({ item: p, policyId: id, syncHash }) => {
+    const themes: string[] = [];
+    if (p.lclsfNm) themes.push(p.lclsfNm);
+    if (p.mclsfNm && p.mclsfNm !== p.lclsfNm) themes.push(p.mclsfNm);
+    return {
+      id,
+      name: p.plcyNm,
+      ministry: p.sprvsnInstCdNm ?? p.operInstCdNm ?? '',
+      summary: cleanText(p.plcyExplnCn ?? ''),
+      ageInfo: buildAgeInfo(p),
+      lclsfNm: p.lclsfNm ?? '',
+      mclsfNm: p.mclsfNm ?? '',
+      syncHash,
+      themes,
+      regionCodes: extractSidoCodes(p.zipCd).slice(0, 10),
+    };
+  });
+
   const session = neo4jDriver.session();
   try {
-    for (const { item: p, policyId: id, syncHash } of policies) {
-      const ministry = p.sprvsnInstCdNm ?? p.operInstCdNm ?? '';
-      const summary = cleanText(p.plcyExplnCn ?? '');
-      const ageInfo = buildAgeInfo(p);
-
-      await session.run(
-        `
-        MERGE (pol:Policy {id: $id})
-        SET pol.name = $name,
-            pol.ministry = $ministry,
-            pol.summary = $summary,
-            pol.ageInfo = $ageInfo,
-            pol.source = 'youth_center',
-            pol.lclsfNm = $lclsfNm,
-            pol.mclsfNm = $mclsfNm,
-            pol.syncHash = $syncHash,
-            pol.updatedAt = datetime()
-        `,
-        {
-          id,
-          name: p.plcyNm,
-          ministry,
-          summary,
-          ageInfo,
-          lclsfNm: p.lclsfNm ?? '',
-          mclsfNm: p.mclsfNm ?? '',
-          syncHash,
-        },
-      );
-
-      // 생애주기 관계 (항상 청년)
-      await session.run(
-        `
-        MERGE (ls:LifeStage {name: '청년'})
-        WITH ls
-        MATCH (pol:Policy {id: $id})
-        MERGE (pol)-[:TARGETS_LIFE_STAGE]->(ls)
-        `,
-        { id },
-      );
-
-      // 대분류 테마 관계
-      if (p.lclsfNm) {
-        await session.run(
-          `
-          MERGE (th:Theme {name: $name})
-          WITH th
-          MATCH (pol:Policy {id: $id})
-          MERGE (pol)-[:HAS_THEME]->(th)
-          `,
-          { name: p.lclsfNm, id },
-        );
-      }
-
-      // 중분류 테마 관계 (대분류와 다를 때만)
-      if (p.mclsfNm && p.mclsfNm !== p.lclsfNm) {
-        await session.run(
-          `
-          MERGE (th:Theme {name: $name})
-          WITH th
-          MATCH (pol:Policy {id: $id})
-          MERGE (pol)-[:HAS_THEME]->(th)
-          `,
-          { name: p.mclsfNm, id },
-        );
-      }
-
-      // 지역 관계 (zipCd → 시도코드)
-      const sidoCodes = extractSidoCodes(p.zipCd);
-      for (const code of sidoCodes.slice(0, 10)) { // 최대 10개 시도만 연결
-        await session.run(
-          `
-          MERGE (r:Region {code: $code})
-          WITH r
-          MATCH (pol:Policy {id: $id})
-          MERGE (pol)-[:AVAILABLE_IN]->(r)
-          `,
-          { code, id },
-        );
-      }
-    }
+    await session.run(
+      `
+      UNWIND $rows AS row
+      MERGE (pol:Policy {id: row.id})
+      SET pol.name = row.name,
+          pol.ministry = row.ministry,
+          pol.summary = row.summary,
+          pol.ageInfo = row.ageInfo,
+          pol.source = 'youth_center',
+          pol.lclsfNm = row.lclsfNm,
+          pol.mclsfNm = row.mclsfNm,
+          pol.syncHash = row.syncHash,
+          pol.updatedAt = datetime()
+      MERGE (youthStage:LifeStage {name: '청년'})
+      MERGE (pol)-[:TARGETS_LIFE_STAGE]->(youthStage)
+      WITH pol, row
+      FOREACH (theme IN row.themes |
+        MERGE (th:Theme {name: theme})
+        MERGE (pol)-[:HAS_THEME]->(th)
+      )
+      FOREACH (code IN row.regionCodes |
+        MERGE (r:Region {code: code})
+        MERGE (pol)-[:AVAILABLE_IN]->(r)
+      )
+      `,
+      { rows },
+    );
   } finally {
     await session.close();
   }
@@ -511,6 +477,7 @@ async function upsertToNeo4j(policies: PreparedYouthPolicy[]): Promise<void> {
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('🚀 청년정책 API 데이터 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
   console.log(`   API: ${YOUTH_BASE_URL}`);
   console.log(`   컬렉션: ${COLLECTION}`);
 
@@ -545,16 +512,27 @@ async function main() {
     `   증분 대상 - 벡터 ${plan.vectorUpdates.length}개, 그래프 ${plan.graphUpdates.length}개, 스킵 ${plan.skippedCount}개`,
   );
 
-  console.log('🗄️ Postgres 정책 동기화 중...');
-  for (let i = 0; i < allPolicies.length; i += EMBED_BATCH) {
-    const relationalBatch = allPolicies
-      .slice(i, i + EMBED_BATCH)
-      .map((item) => toRelationalPolicyInput(item));
-    await syncPoliciesToPostgres(relationalBatch);
-    const done = Math.min(i + EMBED_BATCH, allPolicies.length);
-    process.stdout.write(`   Postgres [${done}/${allPolicies.length}] 처리 완료\r`);
+  const touchedPolicyIds = new Set([
+    ...plan.vectorUpdates.map((item) => item.policyId),
+    ...plan.graphUpdates.map((item) => item.policyId),
+  ]);
+  const policyIdOf = (policy: YouthPolicy) => `youth_${policy.plcyNo}`;
+  const touchedPolicies = allPolicies.filter((policy) => touchedPolicyIds.has(policyIdOf(policy)));
+
+  if (touchedPolicies.length > 0) {
+    console.log(`🗄️ Postgres 정책 동기화 중... (${touchedPolicies.length}건)`);
+    for (let i = 0; i < touchedPolicies.length; i += EMBED_BATCH) {
+      const relationalBatch = touchedPolicies
+        .slice(i, i + EMBED_BATCH)
+        .map((item) => toRelationalPolicyInput(item));
+      await syncPoliciesToPostgres(relationalBatch);
+      const done = Math.min(i + EMBED_BATCH, touchedPolicies.length);
+      process.stdout.write(`   Postgres [${done}/${touchedPolicies.length}] 처리 완료\r`);
+    }
+    console.log('');
+  } else {
+    console.log('🗄️ Postgres 변경 없음 (전건 skip)');
   }
-  console.log('');
 
   if (plan.vectorUpdates.length === 0 && plan.graphUpdates.length === 0) {
     console.log('✅ 변경 없음');

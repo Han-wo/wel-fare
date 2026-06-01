@@ -25,6 +25,44 @@ import { detectAnswerNeedsHitl } from './hitl-detection';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+// 동적 사용자 정보(오늘 날짜/age/region/userId)는 별도 메시지로 분리해 prompt caching 적중률을 높인다.
+const SEARCH_SYSTEM_PROMPT = `당신은 대한민국 복지·지원금 정책 전문 AI 컨설턴트입니다. 사용자 맞춤 정책을 찾아 신청까지 도와줍니다.
+
+## 도구 출력 규칙
+도구 출력은 JSON 구조입니다.
+- summary: 검색 요약
+- graphSummary: 그래프 보강 요약
+- items[]: 실제 근거 문서
+- items[].content: 답변 근거로 직접 인용 가능한 원문
+
+## 도구 사용 규칙
+질문이 복합적이면 여러 도구를 동시에 호출하세요.
+- 일반 복지·수당·급여·서비스: search_welfare
+- 청년 전용: search_youth_policy
+- 청약·분양 공고·청약 일정: search_housing_subscription
+- 전세·월세 지원·LH임대·주거급여: search_rental_support
+- 복지 시설·기관 위치: search_welfare_facility
+- 특정 정책 자격 확인: check_policy_eligibility
+- 지금 신청 가능한 청약: get_upcoming_deadlines
+
+## 정확도 규칙
+1. 검색 결과 JSON에 있는 내용만 답변합니다. 없는 내용은 추측하지 않습니다.
+2. 정책명·금액·신청링크는 items[].content와 metadata에 있는 원문만 사용합니다.
+3. 검색 결과가 없으면 찾지 못했다고 답하고, 필요한 추가 조건을 안내합니다.
+4. 사용자 조건과 맞지 않는 정책은 제외하거나 조건 불일치를 명시합니다.
+
+## 답변 형식
+### 📋 [정책명]
+- **지원내용**: 구체적인 금액·서비스
+- **신청대상**: 조건 요약
+- **신청방법**: 온라인/방문/전화 등
+- **신청링크**: [바로 신청하기](URL)
+- **문의**: 담당기관·전화번호 (있는 경우)
+
+정책 여러 개면 사용자 조건에 가장 부합하는 것부터 안내합니다.
+마감일이 있으면 **굵게 강조**하고, 이미 종료된 청약은 "접수 종료"를 명시합니다.
+마지막에 반드시 "💡 **핵심 요약**: ..." 한 줄을 추가합니다.`;
+
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
     reducer: (x, y) => x.concat(y),
@@ -42,6 +80,10 @@ const GraphState = Annotation.Root({
   }),
   streamCallback: Annotation<((token: string) => void) | null>(),
   hitlCallback: Annotation<((payload: HitlQuestionnaire) => void) | null>(),
+  hitlMeta: Annotation<Record<string, unknown> | null>({
+    reducer: (_current, next) => next,
+    default: () => null,
+  }),
 });
 
 type GraphStateType = typeof GraphState.State;
@@ -85,7 +127,12 @@ export interface RagGraphServices {
     traceId?: string,
   ) => Promise<RetrievalResult>;
   loadHistory: (sessionId: string) => Promise<Array<{ role: string; content: string }>>;
-  saveMessage: (sessionId: string, role: string, content: string) => Promise<void>;
+  saveMessage: (
+    sessionId: string,
+    role: string,
+    content: string,
+    meta?: Record<string, unknown>,
+  ) => Promise<void>;
   recordContext: (
     traceId: string,
     input: { historyCount: number; profileSummary: Record<string, unknown> | null },
@@ -114,7 +161,8 @@ export interface RagGraphServices {
 }
 
 function serializeToolPayload(result: RetrievalResult | EligibilityRetrievalResult) {
-  return JSON.stringify(toStructuredToolPayload(result), null, 2);
+  // 들여쓰기 없이 직렬화해 LLM 입력 토큰을 ~30% 절감.
+  return JSON.stringify(toStructuredToolPayload(result));
 }
 
 export function createRagGraph(services: RagGraphServices) {
@@ -127,18 +175,19 @@ export function createRagGraph(services: RagGraphServices) {
     model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
     streaming: true,
   });
-  const traceIdSchema = z.string().nullable();
+  // traceId는 LLM에 노출하지 않는다. 도구 호출 시 RunnableConfig.metadata로 전달되며,
+  // orchestrator의 graph.invoke()가 이미 metadata.traceId를 채워 모든 노드/도구에 전파한다.
+  const extractTraceId = (config?: RunnableConfig): string | null => {
+    const value = config?.metadata?.traceId;
+    return typeof value === 'string' ? value : null;
+  };
 
   const searchWelfare = tool(
-    async ({
-      question,
-      userId,
-      traceId,
-    }: {
-      question: string;
-      userId: string;
-      traceId: string | null;
-    }) => {
+    async (
+      { question, userId }: { question: string; userId: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '복지 검색',
         content: '일반 복지 정책과 지원 제도를 검색하는 중입니다.',
@@ -161,13 +210,16 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchYouthPolicy = tool(
-    async ({ question, traceId }: { question: string; traceId: string | null }) => {
+    async (
+      { question }: { question: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '청년정책 검색',
         content: '청년 전용 정책과 지원 제도를 찾는 중입니다.',
@@ -189,21 +241,16 @@ export function createRagGraph(services: RagGraphServices) {
         '청년(만 19~34세) 전용 정책을 검색합니다. 청년수당, 청년월세, 청년도약계좌, 청년 취업·창업 지원 등을 찾을 때 사용합니다.',
       schema: z.object({
         question: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchHousingSubscription = tool(
-    async ({
-      question,
-      userId,
-      traceId,
-    }: {
-      question: string;
-      userId: string;
-      traceId: string | null;
-    }) => {
+    async (
+      { question, userId }: { question: string; userId: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '청약 공고 검색',
         content: '청약홈과 공공주택 공고에서 관련 일정을 찾는 중입니다.',
@@ -226,21 +273,16 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchRentalSupport = tool(
-    async ({
-      question,
-      userId,
-      traceId,
-    }: {
-      question: string;
-      userId: string;
-      traceId: string | null;
-    }) => {
+    async (
+      { question, userId }: { question: string; userId: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '주거 지원 검색',
         content: '임대주택과 전월세 지원 제도를 찾는 중입니다.',
@@ -263,23 +305,20 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         question: z.string(),
         userId: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const searchWelfareFacility = tool(
-    async ({
-      question,
-      facility_type,
-      userId,
-      traceId,
-    }: {
-      question: string;
-      facility_type: string;
-      userId: string;
-      traceId: string | null;
-    }) => {
+    async (
+      {
+        question,
+        facility_type,
+        userId,
+      }: { question: string; facility_type: string; userId: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '복지시설 검색',
         content: '가까운 시설과 관련 복지기관을 찾는 중입니다.',
@@ -308,21 +347,16 @@ export function createRagGraph(services: RagGraphServices) {
         question: z.string(),
         facility_type: z.string(),
         userId: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const checkPolicyEligibility = tool(
-    async ({
-      policy_name,
-      userId,
-      traceId,
-    }: {
-      policy_name: string;
-      userId: string;
-      traceId: string | null;
-    }) => {
+    async (
+      { policy_name, userId }: { policy_name: string; userId: string },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '자격 확인',
         content: '정책 조건과 사용자 정보를 비교하는 중입니다.',
@@ -345,21 +379,16 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         policy_name: z.string(),
         userId: z.string(),
-        traceId: traceIdSchema,
       }),
     },
   );
 
   const getUpcomingDeadlines = tool(
-    async ({
-      userId,
-      days_ahead,
-      traceId,
-    }: {
-      userId: string;
-      days_ahead: number;
-      traceId: string | null;
-    }) => {
+    async (
+      { userId, days_ahead }: { userId: string; days_ahead: number },
+      config?: RunnableConfig,
+    ) => {
+      const traceId = extractTraceId(config);
       emitThink(traceId, {
         phase: '마감 일정 조회',
         content: `향후 ${days_ahead}일 기준으로 접수 중이거나 임박한 공고를 찾는 중입니다.`,
@@ -382,7 +411,6 @@ export function createRagGraph(services: RagGraphServices) {
       schema: z.object({
         userId: z.string(),
         days_ahead: z.number().int().min(1).max(30).default(14),
-        traceId: traceIdSchema,
       }),
     },
   );
@@ -463,53 +491,20 @@ export function createRagGraph(services: RagGraphServices) {
     const age = profile?.birthDate ? services.calcAge(profile.birthDate) : '미입력';
     const region = profile?.sidoCode ? services.getSidoName(profile.sidoCode) : '미입력';
 
-    const systemPrompt = `당신은 대한민국 복지·지원금 정책 전문 AI 컨설턴트입니다. 사용자 맞춤 정책을 찾아 신청까지 도와줍니다.
-
-## 오늘 날짜
-${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
-
-## 사용자 정보
-- 나이: ${age}세 | 거주지: ${region} | 가구형태: ${profile?.householdType ?? '미입력'}
-- 직업: ${profile?.occupationType ?? '미입력'} | 소득: 중위소득 ${profile?.incomeBracket ?? '미입력'}% 이하 | 주거: ${profile?.isHomeowner ? '자가' : '무주택/임차'}
-- userId: ${state.userId}
-
-## 도구 출력 규칙
-도구 출력은 JSON 구조입니다.
-- summary: 검색 요약
-- graphSummary: 그래프 보강 요약
-- items[]: 실제 근거 문서
-- items[].content: 답변 근거로 직접 인용 가능한 원문
-
-## 도구 사용 규칙
-질문이 복합적이면 여러 도구를 동시에 호출하세요.
-- 일반 복지·수당·급여·서비스: search_welfare
-- 청년 전용: search_youth_policy
-- 청약·분양 공고·청약 일정: search_housing_subscription
-- 전세·월세 지원·LH임대·주거급여: search_rental_support
-- 복지 시설·기관 위치: search_welfare_facility
-- 특정 정책 자격 확인: check_policy_eligibility
-- 지금 신청 가능한 청약: get_upcoming_deadlines
-
-## 정확도 규칙
-1. 검색 결과 JSON에 있는 내용만 답변합니다. 없는 내용은 추측하지 않습니다.
-2. 정책명·금액·신청링크는 items[].content와 metadata에 있는 원문만 사용합니다.
-3. 검색 결과가 없으면 찾지 못했다고 답하고, 필요한 추가 조건을 안내합니다.
-4. 사용자 조건과 맞지 않는 정책은 제외하거나 조건 불일치를 명시합니다.
-
-## 답변 형식
-### 📋 [정책명]
-- **지원내용**: 구체적인 금액·서비스
-- **신청대상**: 조건 요약
-- **신청방법**: 온라인/방문/전화 등
-- **신청링크**: [바로 신청하기](URL)
-- **문의**: 담당기관·전화번호 (있는 경우)
-
-정책 여러 개면 사용자 조건에 가장 부합하는 것부터 안내합니다.
-마감일이 있으면 **굵게 강조**하고, 이미 종료된 청약은 "접수 종료"를 명시합니다.
-마지막에 반드시 "💡 **핵심 요약**: ..." 한 줄을 추가합니다.`;
-
     const historyMessages: BaseMessage[] = rawHistory.map((message) =>
       message.role === 'user' ? new HumanMessage(message.content) : new AIMessage(message.content),
+    );
+
+    const userContextMessage = new HumanMessage(
+      [
+        '## 오늘 날짜',
+        `${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)`,
+        '',
+        '## 사용자 정보',
+        `- 나이: ${age}세 | 거주지: ${region} | 가구형태: ${profile?.householdType ?? '미입력'}`,
+        `- 직업: ${profile?.occupationType ?? '미입력'} | 소득: 중위소득 ${profile?.incomeBracket ?? '미입력'}% 이하 | 주거: ${profile?.isHomeowner ? '자가' : '무주택/임차'}`,
+        `- userId: ${state.userId}`,
+      ].join('\n'),
     );
 
     services.recordContext(state.traceId, {
@@ -534,7 +529,12 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
 
     return {
       profile,
-      messages: [new SystemMessage(systemPrompt), ...historyMessages, new HumanMessage(state.question)],
+      messages: [
+        new SystemMessage(SEARCH_SYSTEM_PROMPT),
+        userContextMessage,
+        ...historyMessages,
+        new HumanMessage(state.question),
+      ],
     };
   }
 
@@ -639,12 +639,7 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
     }
 
     const finalMessage = chunks.reduce((acc, chunk) => acc.concat(chunk));
-    if (finalMessage.tool_calls?.length) {
-      finalMessage.tool_calls = finalMessage.tool_calls.map((toolCall) => ({
-        ...toolCall,
-        args: { ...(toolCall.args ?? {}), traceId: state.traceId },
-      }));
-    }
+    // traceId는 RunnableConfig.metadata로 자동 전파되므로 args에 별도 주입할 필요 없음.
 
     for (const toolCall of finalMessage.tool_calls ?? []) {
       services.recordToolSelection(state.traceId, {
@@ -711,12 +706,25 @@ ${today} (이 날짜 이후 접수 기간이 유효한 정책·청약만 안내)
       status: 'done',
     });
 
-    return { skipSave: true };
+    return {
+      hitlMeta: {
+        hitl: {
+          reason: detection.reason,
+          questionnaireId: questionnaire.id,
+          source: 'verify_answer',
+        },
+      },
+    };
   }
 
   async function saveMessage(state: GraphStateType): Promise<Partial<GraphStateType>> {
     if (state.sessionId && state.answer && !state.skipSave) {
-      await services.saveMessage(state.sessionId, 'assistant', state.answer);
+      await services.saveMessage(
+        state.sessionId,
+        'assistant',
+        state.answer,
+        state.hitlMeta ?? undefined,
+      );
     }
     return {};
   }

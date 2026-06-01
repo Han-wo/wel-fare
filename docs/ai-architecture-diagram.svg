@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="920" viewBox="0 0 1440 920" role="img" aria-labelledby="title desc">
+  <title id="title">WelfareAI AI Backend Architecture</title>
+  <desc id="desc">A diagram of WelfareAI backend architecture showing query routing, three LangGraph execution paths, hybrid retrieval, streaming runtime, and trace storage.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L11,6 L1,11 Z" fill="#64748b"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #dbe3ea; stroke-width: 1.5; }
+      .panel-soft { fill: #f9fbfc; stroke: #dbe3ea; stroke-width: 1.5; }
+      .title { font: 800 38px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 18px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #475569; }
+      .lane { font: 800 18px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #0f172a; }
+      .card-title { font: 700 18px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #0f172a; }
+      .card-body { font: 400 14px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #475569; }
+      .chip-text { font: 700 13px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #ffffff; }
+      .footer-title { font: 700 14px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #cbd5e1; }
+      .footer-text { font: 500 14px Arial, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; fill: #ffffff; }
+      .line { stroke: #64748b; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .line-soft { stroke: #94a3b8; stroke-width: 2; fill: none; marker-end: url(#arrow); stroke-dasharray: 7 7; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="920"/>
+  <rect x="52" y="44" width="1336" height="790" rx="28" fill="#ffffff" filter="url(#shadow)"/>
+
+  <text x="84" y="88" class="title">WelfareAI AI Backend Architecture</text>
+  <text x="84" y="118" class="subtitle">질문 라우팅부터 LangGraph 실행, 하이브리드 RAG, 스트리밍 런타임, trace 저장까지의 실제 흐름</text>
+
+  <rect x="84" y="156" width="302" height="616" rx="18" class="panel-soft"/>
+  <rect x="420" y="156" width="470" height="616" rx="18" class="panel-soft"/>
+  <rect x="924" y="156" width="432" height="616" rx="18" class="panel-soft"/>
+
+  <text x="112" y="192" class="lane">1. Entry And Routing</text>
+  <text x="448" y="192" class="lane">2. Route-Specific LangGraph</text>
+  <text x="952" y="192" class="lane">3. Retrieval And Operations</text>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="228" width="220" height="80" rx="14" class="panel"/>
+    <text x="152" y="261" class="card-title">User Question</text>
+    <text x="152" y="286" class="card-body">question + sessionId</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="354" width="220" height="86" rx="14" class="panel"/>
+    <text x="152" y="388" class="card-title">RagService</text>
+    <text x="152" y="413" class="card-body">thin entry facade</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="488" width="220" height="96" rx="14" fill="#0f766e" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="152" y="522" style="font:700 18px Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; fill:#ffffff;">RagOrchestratorService</text>
+    <text x="152" y="548" style="font:400 14px Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; fill:#dcfce7;">session ownership</text>
+    <text x="152" y="570" style="font:400 14px Arial, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif; fill:#dcfce7;">trace start / graph selection</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="124" y="632" width="220" height="86" rx="14" class="panel"/>
+    <text x="152" y="666" class="card-title">QueryAnalysisService</text>
+    <text x="152" y="691" class="card-body">route decision + HITL gate</text>
+  </g>
+
+  <path class="line" d="M234 308 V350"/>
+  <path class="line" d="M234 440 V484"/>
+  <path class="line" d="M234 584 V628"/>
+
+  <g filter="url(#shadow)">
+    <rect x="454" y="224" width="402" height="118" rx="16" class="panel"/>
+    <rect x="480" y="247" width="82" height="30" rx="15" fill="#0f766e"/>
+    <text x="502" y="267" class="chip-text">SEARCH</text>
+    <text x="480" y="304" class="card-title">Search Graph</text>
+    <text x="480" y="328" class="card-body">pre-route rule check</text>
+    <text x="480" y="350" class="card-body">OpenAI tool calling ReAct loop</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="454" y="396" width="402" height="118" rx="16" class="panel"/>
+    <rect x="480" y="419" width="118" height="30" rx="15" fill="#2563eb"/>
+    <text x="501" y="439" class="chip-text">ELIGIBILITY</text>
+    <text x="480" y="476" class="card-title">Eligibility Graph</text>
+    <text x="480" y="500" class="card-body">policy evidence collection</text>
+    <text x="480" y="522" class="card-body">deterministic eligibility judgment</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="454" y="568" width="402" height="132" rx="16" class="panel"/>
+    <rect x="480" y="591" width="180" height="30" rx="15" fill="#7c3aed"/>
+    <text x="501" y="611" class="chip-text">APPLICATION_ASSIST</text>
+    <text x="480" y="648" class="card-title">Application Assist Graph</text>
+    <text x="480" y="672" class="card-body">source selection</text>
+    <text x="480" y="694" class="card-body">multi-retrieval and application guide</text>
+  </g>
+
+  <path class="line" d="M344 675 C398 675 400 283 450 283"/>
+  <path class="line" d="M344 675 C398 675 400 455 450 455"/>
+  <path class="line" d="M344 675 C398 675 400 634 450 634"/>
+
+  <g filter="url(#shadow)">
+    <rect x="960" y="210" width="360" height="90" rx="16" class="panel"/>
+    <text x="990" y="245" class="card-title">RetrieverServices</text>
+    <text x="990" y="270" class="card-body">domain retriever composition facade</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="960" y="340" width="164" height="86" rx="14" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.5"/>
+    <text x="990" y="376" class="card-title">Qdrant</text>
+    <text x="990" y="401" class="card-body">vector retrieval</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1156" y="340" width="164" height="86" rx="14" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+    <text x="1186" y="376" class="card-title">Neo4j</text>
+    <text x="1186" y="401" class="card-body">ontology / graph walk</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="960" y="466" width="164" height="86" rx="14" class="panel"/>
+    <text x="990" y="502" class="card-title">PostgreSQL</text>
+    <text x="990" y="527" class="card-body">profile / messages</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1156" y="466" width="164" height="86" rx="14" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <text x="1186" y="502" class="card-title">Redis</text>
+    <text x="1186" y="527" class="card-body">runtime / cache</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="960" y="592" width="360" height="90" rx="16" class="panel"/>
+    <text x="990" y="627" class="card-title">TraceFacade / RagTraceService</text>
+    <text x="990" y="652" class="card-body">route, tool call, vector hit, graph walk persistence</text>
+  </g>
+
+  <path class="line" d="M856 283 H956"/>
+  <path class="line" d="M856 455 C912 455 908 255 956 255"/>
+  <path class="line" d="M856 634 C920 634 910 255 956 255"/>
+
+  <path class="line" d="M1042 300 V336"/>
+  <path class="line" d="M1238 300 V336"/>
+  <path class="line" d="M1042 300 V462"/>
+  <path class="line" d="M1238 300 V462"/>
+
+  <path class="line-soft" d="M344 536 C760 536 792 637 956 637"/>
+  <path class="line-soft" d="M344 536 C786 536 786 509 956 509"/>
+  <path class="line-soft" d="M344 536 C880 536 982 509 1152 509"/>
+
+  <rect x="84" y="796" width="1272" height="70" rx="18" fill="#0f172a"/>
+  <text x="112" y="824" class="footer-title">Design Notes</text>
+  <text x="230" y="824" class="footer-text">명확한 질문은 pre-route shortcut으로 바로 처리</text>
+  <text x="570" y="824" class="footer-text">목적별 그래프로 search / eligibility / application assist 분리</text>
+  <text x="1060" y="824" class="footer-text">Qdrant + Neo4j 하이브리드 RAG</text>
+  <text x="230" y="850" class="footer-text">스트리밍 런타임과 trace 저장을 오케스트레이션 바깥 운영 레이어로 분리</text>
+</svg>

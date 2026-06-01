@@ -22,6 +22,7 @@ import {
   syncPoliciesToPostgres,
   type RelationalPolicyUpsertInput,
 } from './policy-relational-sync.util';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 
 // ── 설정 ─────────────────────────────────────────────────
 const API_KEY = getRequiredAnyEnv([
@@ -31,11 +32,11 @@ const API_KEY = getRequiredAnyEnv([
 const LOCAL_BASE_URL =
   'https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations';
 const PAGE_SIZE = 100;
-const EMBED_BATCH = 20;
+const EMBED_BATCH = 100;
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 const publicApiClient = axios.create({
-  httpAgent: new http.Agent({ keepAlive: false }),
-  httpsAgent: new https.Agent({ keepAlive: false }),
+  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 16 }),
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 16 }),
 });
 
 const qdrant = new QdrantClient({
@@ -327,66 +328,53 @@ async function upsertToQdrant(
 
 // ── Neo4j upsert ─────────────────────────────────────────
 async function upsertToNeo4j(policies: PreparedLocalPolicy[]): Promise<void> {
+  if (policies.length === 0) return;
+  const rows = policies.map(({ item: p, syncHash }) => ({
+    id: p.servId,
+    name: p.servNm,
+    region: p.ctpvNm ?? '',
+    sigungu: p.sggNm ?? '',
+    ministry: p.bizChrDeptNm ?? '',
+    summary: cleanText(p.servDgst),
+    supportCycle: p.sprtCycNm ?? '',
+    provisionType: p.srvPvsnNm ?? '',
+    syncHash,
+    lifeStages: splitValues(p.lifeNmArray),
+    themes: splitValues(p.intrsThemaNmArray),
+  }));
+
   const session = neo4jDriver.session();
   try {
-    for (const { item: p, syncHash } of policies) {
-      await session.run(
-        `
-        MERGE (pol:Policy {id: $id})
-        SET pol.name = $name,
-            pol.region = $region,
-            pol.sigungu = $sigungu,
-            pol.ministry = $ministry,
-            pol.summary = $summary,
-            pol.supportCycle = $supportCycle,
-            pol.provisionType = $provisionType,
-            pol.source = 'local_bokjiro', pol.syncHash = $syncHash,
-            pol.updatedAt = datetime()
-        `,
-        {
-          id: p.servId,
-          name: p.servNm,
-          region: p.ctpvNm,
-          sigungu: p.sggNm ?? '',
-          ministry: p.bizChrDeptNm ?? '',
-          summary: cleanText(p.servDgst),
-          supportCycle: p.sprtCycNm ?? '',
-          provisionType: p.srvPvsnNm ?? '',
-          syncHash,
-        },
-      );
-
-      // 지역 관계
-      await session.run(
-        `
-        MERGE (r:Region {name: $region})
-        WITH r
-        MATCH (pol:Policy {id: $id})
+    await session.run(
+      `
+      UNWIND $rows AS row
+      MERGE (pol:Policy {id: row.id})
+      SET pol.name = row.name,
+          pol.region = row.region,
+          pol.sigungu = row.sigungu,
+          pol.ministry = row.ministry,
+          pol.summary = row.summary,
+          pol.supportCycle = row.supportCycle,
+          pol.provisionType = row.provisionType,
+          pol.source = 'local_bokjiro',
+          pol.syncHash = row.syncHash,
+          pol.updatedAt = datetime()
+      WITH pol, row
+      FOREACH (regionName IN CASE WHEN row.region <> '' THEN [row.region] ELSE [] END |
+        MERGE (r:Region {name: regionName})
         MERGE (pol)-[:AVAILABLE_IN]->(r)
-        `,
-        { region: p.ctpvNm, id: p.servId },
-      );
-
-      // 생애주기 관계
-      if (p.lifeNmArray) {
-        for (const stage of p.lifeNmArray.split(',').map((s) => s.trim()).filter(Boolean)) {
-          await session.run(
-            `MERGE (ls:LifeStage {name: $name}) WITH ls MATCH (pol:Policy {id: $id}) MERGE (pol)-[:TARGETS_LIFE_STAGE]->(ls)`,
-            { name: stage, id: p.servId },
-          );
-        }
-      }
-
-      // 주제 관계
-      if (p.intrsThemaNmArray) {
-        for (const theme of p.intrsThemaNmArray.split(',').map((s) => s.trim()).filter(Boolean)) {
-          await session.run(
-            `MERGE (th:Theme {name: $name}) WITH th MATCH (pol:Policy {id: $id}) MERGE (pol)-[:HAS_THEME]->(th)`,
-            { name: theme, id: p.servId },
-          );
-        }
-      }
-    }
+      )
+      FOREACH (stage IN row.lifeStages |
+        MERGE (ls:LifeStage {name: stage})
+        MERGE (pol)-[:TARGETS_LIFE_STAGE]->(ls)
+      )
+      FOREACH (theme IN row.themes |
+        MERGE (th:Theme {name: theme})
+        MERGE (pol)-[:HAS_THEME]->(th)
+      )
+      `,
+      { rows },
+    );
   } finally {
     await session.close();
   }
@@ -395,6 +383,7 @@ async function upsertToNeo4j(policies: PreparedLocalPolicy[]): Promise<void> {
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('🚀 지자체 복지서비스 공공API 데이터 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
 
   console.log('📋 정책 목록 수집 중...');
   const allItems: LocalPolicyListItem[] = [];
@@ -434,7 +423,13 @@ async function main() {
       graphLabel: 'Policy',
     });
     skipped += plan.skippedCount;
-    const relationalBatch = details.map((item) => toRelationalPolicyInput(item));
+    const touchedPolicyIds = new Set([
+      ...plan.vectorUpdates.map((item) => item.policyId),
+      ...plan.graphUpdates.map((item) => item.policyId),
+    ]);
+    const relationalBatch = details
+      .filter((item) => touchedPolicyIds.has(item.servId))
+      .map((item) => toRelationalPolicyInput(item));
 
     const vectorPromise =
       plan.vectorUpdates.length > 0

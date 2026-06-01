@@ -89,7 +89,7 @@ export class RagOrchestratorService {
         tags: ['neo4j', 'deadline'],
       }),
       loadHistory: this.loadChatHistory.bind(this),
-      saveMessage: this.saveAssistantMessage.bind(this),
+      saveMessage: this.saveAssistantMessage.bind(this) as RagGraphServices['saveMessage'],
       recordContext: this.traceFacade.recordContext.bind(this.traceFacade),
       recordEvent: this.traceFacade.addEvent.bind(this.traceFacade),
       recordToolSelection: this.traceFacade.recordToolSelection.bind(this.traceFacade),
@@ -237,24 +237,31 @@ export class RagOrchestratorService {
   }
 
   private async loadChatHistory(sessionId: string) {
-    const messages = await this.messageRepo.find({
+    const recent = await this.messageRepo.find({
       where: { sessionId },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'DESC' },
       take: 10,
     });
 
-    return messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
+    return recent
+      .reverse()
+      .map((message) => ({
+        role: message.role,
+        content: message.content,
+      }));
   }
 
-  private async saveAssistantMessage(sessionId: string, role: string, content: string) {
+  private async saveAssistantMessage(
+    sessionId: string,
+    role: string,
+    content: string,
+    meta?: Record<string, unknown>,
+  ) {
     if (role === 'assistant' && !(await this.chatRuntime.isSessionOpen(sessionId))) {
       return;
     }
 
-    await this.persistMessage(sessionId, role, content);
+    await this.persistMessage(sessionId, role, content, undefined, meta);
   }
 
   private async saveUserMessage(sessionId: string, content: string) {
@@ -266,6 +273,7 @@ export class RagOrchestratorService {
     role: 'user' | 'assistant' | string,
     content: string,
     nextTitle?: string,
+    ragContext?: Record<string, unknown>,
   ) {
     await this.messageRepo.save(
       this.messageRepo.create({
@@ -273,6 +281,7 @@ export class RagOrchestratorService {
         session: { id: sessionId } as ChatSession,
         role,
         content,
+        ...(ragContext ? { ragContext } : {}),
       }),
     );
 

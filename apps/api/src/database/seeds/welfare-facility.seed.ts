@@ -4,10 +4,12 @@
  * 실행: ts-node --transpile-only src/database/seeds/welfare-facility.seed.ts
  */
 import axios from 'axios';
+import './http-agent'; // axios keepAlive 글로벌 적용
 import * as xml2js from 'xml2js';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
 import OpenAI from 'openai';
+import { ensureNeo4jConstraints } from './neo4j-constraints';
 import { getRequiredAnyEnv, getRequiredEnv } from '../../common/env.util';
 import {
   buildIncrementalSyncPlan,
@@ -22,8 +24,8 @@ const API_KEY = getRequiredAnyEnv([
 ]);
 const BASE_URL = 'https://apis.data.go.kr/B554287/sclWlfrFcltInfoInqirService1';
 const PAGE_SIZE = 100;
-const EMBED_BATCH = 20;
-const EMBED_CONCURRENCY = 5; // 동시에 처리할 배치 수
+const EMBED_BATCH = 100;
+const EMBED_CONCURRENCY = 3; // 동시에 처리할 배치 수 (BATCH 100 * CONCURRENCY 3 = 라운드당 300)
 const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
 
 const qdrant = new QdrantClient({
@@ -200,6 +202,7 @@ async function upsertToNeo4j(facilities: PreparedFacility[]): Promise<void> {
 // ── 메인 ─────────────────────────────────────────────────
 async function main() {
   console.log('🏥 사회복지시설 정보 적재 시작');
+  await ensureNeo4jConstraints(neo4jDriver);
 
   // 1. 전체 목록 수집
   const { total, items: firstPage } = await fetchFacilities(1);
