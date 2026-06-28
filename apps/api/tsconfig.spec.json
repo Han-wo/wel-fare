@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@welfare-ai/shared-types": ["../../packages/shared-types/src"],
+      "@welfare-ai/shared-utils": ["../../packages/shared-utils/src"]
+    }
+  }
+}
