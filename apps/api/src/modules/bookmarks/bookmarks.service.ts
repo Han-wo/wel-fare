@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Bookmark } from './entities/bookmark.entity';
@@ -31,15 +31,25 @@ export class BookmarksService {
     return this.repo.save(this.repo.create({ userId, policyId }));
   }
 
-  async updateStatus(id: string, status: string) {
-    await this.repo.update(id, {
-      status,
-      ...(status === 'APPLIED' ? { appliedAt: new Date() } : {}),
-    });
-    return this.repo.findOne({ where: { id } });
+  async updateStatus(userId: string, id: string, status: string) {
+    const result = await this.repo.update(
+      { id, userId },
+      {
+        status,
+        ...(status === 'APPLIED' ? { appliedAt: new Date() } : {}),
+      },
+    );
+    if (!result.affected) {
+      throw new NotFoundException('북마크를 찾을 수 없습니다.');
+    }
+    return this.repo.findOne({ where: { id, userId } });
   }
 
-  remove(id: string) {
-    return this.repo.delete(id);
+  async remove(userId: string, id: string) {
+    const result = await this.repo.delete({ id, userId });
+    if (!result.affected) {
+      throw new NotFoundException('북마크를 찾을 수 없습니다.');
+    }
+    return { success: true };
   }
 }

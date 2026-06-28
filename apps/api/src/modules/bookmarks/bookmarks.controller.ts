@@ -21,12 +21,16 @@ export class BookmarksController {
   }
 
   @Patch(':id')
-  updateStatus(@Param('id') id: string, @Body('status') status: string) {
-    return this.bookmarksService.updateStatus(id, status);
+  updateStatus(
+    @Request() req: { user: { id: string } },
+    @Param('id') id: string,
+    @Body('status') status: string,
+  ) {
+    return this.bookmarksService.updateStatus(req.user.id, id, status);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.bookmarksService.remove(id);
+  remove(@Request() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.bookmarksService.remove(req.user.id, id);
   }
 }

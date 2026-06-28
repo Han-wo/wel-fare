@@ -66,6 +66,10 @@ export class AuthService {
     return this.generateTokens(user);
   }
 
+  private getRefreshSecret(): string {
+    return this.configService.getOrThrow<string>('JWT_REFRESH_SECRET');
+  }
+
   generateTokens(user: User) {
     const payload = { sub: user.id, email: user.email, role: user.role };
     return {
@@ -73,7 +77,7 @@ export class AuthService {
         expiresIn: this.configService.get('JWT_EXPIRES_IN', '15m'),
       }),
       refreshToken: this.jwtService.sign(payload, {
-        secret: this.configService.get('JWT_REFRESH_SECRET'),
+        secret: this.getRefreshSecret(),
         expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN', '30d'),
       }),
       user: { id: user.id, name: user.name, role: user.role },
@@ -83,7 +87,7 @@ export class AuthService {
   async refresh(refreshToken: string) {
     try {
       const payload = this.jwtService.verify<{ sub: string }>(refreshToken, {
-        secret: this.configService.get('JWT_REFRESH_SECRET'),
+        secret: this.getRefreshSecret(),
       });
       const user = await this.userRepo.findOne({ where: { id: payload.sub } });
       if (!user) throw new UnauthorizedException();
