@@ -56,7 +56,9 @@ for ((i=0; i<COUNT; i++)); do
 
   (
     cd "$API_DIR"
-    npx ts-node -r dotenv/config --transpile-only "$SEED_DIR/$SCRIPT" > "$LOG" 2>&1
+    # tsconfig.scripts.json: 워크스페이스 패키지(@welfare-ai/*)를 dist 빌드 없이
+    # 소스에서 해소 + transpileOnly. 새 클론에서도 빌드 선행 없이 동작.
+    TS_NODE_PROJECT=tsconfig.scripts.json npx ts-node -r dotenv/config "$SEED_DIR/$SCRIPT" > "$LOG" 2>&1
   ) &
   PIDS+=($!)
 done

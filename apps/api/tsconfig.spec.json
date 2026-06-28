@@ -1,9 +1,5 @@
 {
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "paths": {
-      "@welfare-ai/shared-types": ["../../packages/shared-types/src"],
-      "@welfare-ai/shared-utils": ["../../packages/shared-utils/src"]
-    }
-  }
+  // jest(ts-jest) 타입체크용. 워크스페이스 패키지 경로 매핑은
+  // tsconfig.scripts.json 한 곳에서 상속받아 중복을 없앤다.
+  "extends": "./tsconfig.scripts.json"
 }
