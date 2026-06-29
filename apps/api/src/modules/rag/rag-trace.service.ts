@@ -348,6 +348,127 @@ export class RagTraceService {
     return trace;
   }
 
+  // 히스토리 전체를 가로질러 run을 조회한다(LangSmith runs 테이블 대응).
+  // 상태/route/model/텍스트/기간 필터 + 페이지네이션 + total.
+  async listTraces(params: {
+    limit?: number;
+    offset?: number;
+    status?: RagTraceStatus;
+    routeType?: string;
+    model?: string;
+    q?: string;
+    from?: string;
+    to?: string;
+    errorsOnly?: boolean;
+  }): Promise<{ items: RagTrace[]; total: number; limit: number; offset: number }> {
+    const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
+    const offset = Math.max(params.offset ?? 0, 0);
+
+    const qb = this.traceRepo
+      .createQueryBuilder('t')
+      .select([
+        't.id',
+        't.sessionId',
+        't.userId',
+        't.question',
+        't.answer',
+        't.status',
+        't.routeType',
+        't.model',
+        't.toolNames',
+        't.summary',
+        't.error',
+        't.startedAt',
+        't.finishedAt',
+        't.durationMs',
+      ])
+      .orderBy('t.startedAt', 'DESC')
+      .take(limit)
+      .skip(offset);
+
+    if (params.status) qb.andWhere('t.status = :status', { status: params.status });
+    if (params.errorsOnly) {
+      qb.andWhere("(t.status IN ('FAILED', 'ABORTED') OR t.error IS NOT NULL)");
+    }
+    if (params.routeType) qb.andWhere('t.routeType = :routeType', { routeType: params.routeType });
+    if (params.model) qb.andWhere('t.model = :model', { model: params.model });
+    if (params.q) {
+      qb.andWhere('(t.question ILIKE :q OR t.answer ILIKE :q)', { q: `%${params.q}%` });
+    }
+    if (params.from) qb.andWhere('t.startedAt >= :from', { from: params.from });
+    if (params.to) qb.andWhere('t.startedAt <= :to', { to: params.to });
+
+    const [items, total] = await qb.getManyAndCount();
+    return { items, total, limit, offset };
+  }
+
+  // 대시보드 집계(LangSmith monitoring 대응): 상태 분포·에러율·지연 분위수·
+  // route 분포·그라운딩 경고(환각) 수.
+  async getStats(params: { from?: string; to?: string }) {
+    const conditions: string[] = [];
+    const args: unknown[] = [];
+    if (params.from) {
+      args.push(params.from);
+      conditions.push(`started_at >= $${args.length}`);
+    }
+    if (params.to) {
+      args.push(params.to);
+      conditions.push(`started_at <= $${args.length}`);
+    }
+    const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const [agg] = await this.traceRepo.query(
+      `SELECT
+         count(*)::int AS total,
+         count(*) FILTER (WHERE status = 'SUCCESS')::int AS success,
+         count(*) FILTER (WHERE status = 'FAILED')::int AS failed,
+         count(*) FILTER (WHERE status = 'ABORTED')::int AS aborted,
+         count(*) FILTER (WHERE status = 'RUNNING')::int AS running,
+         round(avg(duration_ms))::int AS avg_duration_ms,
+         (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::int AS p50_duration_ms,
+         (percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::int AS p95_duration_ms
+       FROM rag_traces ${whereSql}`,
+      args,
+    );
+
+    const byRoute: Array<{ route: string; count: number }> = await this.traceRepo.query(
+      `SELECT COALESCE(route_type, '(none)') AS route, count(*)::int AS count
+       FROM rag_traces ${whereSql}
+       GROUP BY route_type ORDER BY count DESC`,
+      args,
+    );
+
+    const [hallucination] = await this.traceRepo.query(
+      `SELECT count(*)::int AS warned
+       FROM rag_traces ${whereSql ? `${whereSql} AND` : 'WHERE'} EXISTS (
+         SELECT 1 FROM jsonb_array_elements(events) e WHERE e->>'title' = '답변 그라운딩 경고'
+       )`,
+      args,
+    );
+
+    const total = agg?.total ?? 0;
+    const failed = agg?.failed ?? 0;
+    const aborted = agg?.aborted ?? 0;
+
+    return {
+      total,
+      byStatus: {
+        success: agg?.success ?? 0,
+        failed,
+        aborted,
+        running: agg?.running ?? 0,
+      },
+      errorRate: total > 0 ? (failed + aborted) / total : 0,
+      durationMs: {
+        avg: agg?.avg_duration_ms ?? null,
+        p50: agg?.p50_duration_ms ?? null,
+        p95: agg?.p95_duration_ms ?? null,
+      },
+      byRoute,
+      hallucinationWarnings: hallucination?.warned ?? 0,
+    };
+  }
+
   private recordEvent(traceId: string, input: RecordEventInput) {
     const draft = this.drafts.get(traceId);
     if (!draft) return;
