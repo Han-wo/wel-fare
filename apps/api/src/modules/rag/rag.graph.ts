@@ -23,6 +23,7 @@ import type { RagThinkPayload } from './thinking.types';
 import type { HitlQuestionnaire } from './hitl.types';
 import type { HitlSuggestionService } from './hitl-suggestion.service';
 import { detectAnswerNeedsHitl } from './hitl-detection';
+import { assessNamedProgramCoverage, type RetrievedDoc } from './retrieval-confidence';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -690,11 +691,8 @@ export function createRagGraph(services: RagGraphServices) {
       return { retrievalLowConfidence: false };
     }
 
-    // 우발적 언급(예: "기초연금과 중복 불가")으로 오판하지 않도록, 검색된 문서의
-    // 정책명(title) 또는 본문의 구조화 마커 "[정책명] X" 에서만 엔티티를 찾는다.
-    // query/summary echo는 보지 않는다.
-    const titles: string[] = [];
-    const contents: string[] = [];
+    // 검색된 문서(items)만 모은다. payload의 query/summary에는 질문이 echo되므로 제외.
+    const docs: RetrievedDoc[] = [];
     for (const message of state.messages) {
       if (!(message instanceof ToolMessage)) continue;
       try {
@@ -702,19 +700,18 @@ export function createRagGraph(services: RagGraphServices) {
           items?: Array<{ content?: unknown; title?: unknown }>;
         };
         for (const item of parsed.items ?? []) {
-          if (typeof item.title === 'string') titles.push(item.title);
-          if (typeof item.content === 'string') contents.push(item.content);
+          docs.push({
+            title: typeof item.title === 'string' ? item.title : null,
+            content: typeof item.content === 'string' ? item.content : null,
+          });
         }
       } catch {
-        contents.push(String(message.content));
+        docs.push({ content: String(message.content) });
       }
     }
 
-    const found = namedPrograms.some(
-      (program) =>
-        titles.some((title) => title.includes(program)) ||
-        contents.some((content) => new RegExp(`\\[정책명\\]\\s*${program}`).test(content)),
-    );
+    const assessment = assessNamedProgramCoverage(namedPrograms, docs);
+    const found = !assessment.lowConfidence;
 
     emitThink(state.traceId, {
       phase: '검색 신뢰도 점검',
