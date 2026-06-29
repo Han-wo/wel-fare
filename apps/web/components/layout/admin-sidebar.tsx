@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  BarChart3,
   Database,
   FileText,
   LogOut,
@@ -29,6 +30,7 @@ interface Item {
 const MONITORING: Item[] = [
   { key: 'sync', href: '/admin', icon: Database, label: '동기화 현황' },
   { key: 'trace', href: '/admin/traces', icon: Workflow, label: 'AI 추적' },
+  { key: 'observability', href: '/admin/observability', icon: BarChart3, label: '옵저버빌리티' },
   { key: 'usage', href: null, icon: Activity, label: '사용량 통계' },
   { key: 'permission', href: null, icon: Shield, label: '권한 관리' },
 ];
@@ -38,7 +40,7 @@ const SETTINGS: Item[] = [
   { key: 'docs', href: null, icon: FileText, label: '문서' },
 ];
 
-export function AdminSidebar({ active }: { active: 'sync' | 'trace' }) {
+export function AdminSidebar({ active }: { active: 'sync' | 'trace' | 'observability' }) {
   const router = useRouter();
   const pathname = usePathname();
   const userName = useUserStore((s) => s.userName);
