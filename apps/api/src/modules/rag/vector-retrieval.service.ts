@@ -24,6 +24,23 @@ const EMBEDDING_CACHE_TTL_SECONDS = 60 * 60 * 24;
 const RETRIEVAL_CACHE_TTL_SECONDS = 60 * 10;
 const FAST_MOVING_CACHE_TTL_SECONDS = 60 * 5;
 
+// 일반 복지 검색: 프로필 온톨로지를 하드 필터(must)로 쓰면 프로필과 안 맞는
+// 특정 정책(예: 36세 유저의 "기초연금")이 코퍼스에 있어도 후보군에서 원천 배제된다.
+// 그래서 (1) source 전체 의미검색으로 recall을 확보하고, (2) 온톨로지 후보는
+// 같은 쿼리 벡터로 랭킹해 부스트로 합친다(union + boost). 최종 적합 판단은 LLM이
+// 프로필 컨텍스트로 수행한다.
+const GENERAL_WELFARE_SEMANTIC_LIMIT = 10;
+const GENERAL_WELFARE_ONTOLOGY_LIMIT = 8;
+const GENERAL_WELFARE_RESULT_LIMIT = 8;
+const GENERAL_WELFARE_SEMANTIC_THRESHOLD = 0.4;
+const GENERAL_WELFARE_ONTOLOGY_BOOST = 0.15;
+
+type QdrantHit = {
+  id?: string | number;
+  score?: number | null;
+  payload?: Record<string, unknown> | null;
+};
+
 @Injectable()
 export class VectorRetrievalService {
   private readonly logger = new Logger(VectorRetrievalService.name);
@@ -63,34 +80,51 @@ export class VectorRetrievalService {
       dataVersionScope: 'welfare',
       loader: async () => {
         const queryVector = await this.embedQueryCached(normalizedQuestion, 'general-welfare');
-        const filter =
+
+        const sourceFilter = {
+          should: [
+            { key: 'source', match: { value: 'bokjiro' } },
+            { key: 'source', match: { value: 'local_bokjiro' } },
+          ],
+        };
+
+        // (1) recall: 프로필과 무관하게 질문에 직접 부합하는 정책을 코퍼스 전체에서.
+        // (2) personalization: 온톨로지 후보를 같은 쿼리 벡터로 랭킹(하드 임계값 없음).
+        const [semanticHits, ontologyHits] = await Promise.all([
+          this.qdrantClient.search(this.collectionName, {
+            vector: queryVector,
+            limit: GENERAL_WELFARE_SEMANTIC_LIMIT,
+            filter: sourceFilter,
+            with_payload: true,
+            score_threshold: GENERAL_WELFARE_SEMANTIC_THRESHOLD,
+          }),
           normalizedPolicyIds.length > 0
-            ? { must: [{ key: 'policyId', match: { any: normalizedPolicyIds } }] }
-            : {
-                should: [
-                  { key: 'source', match: { value: 'bokjiro' } },
-                  { key: 'source', match: { value: 'local_bokjiro' } },
-                ],
-              };
+            ? this.qdrantClient.search(this.collectionName, {
+                vector: queryVector,
+                limit: GENERAL_WELFARE_ONTOLOGY_LIMIT,
+                filter: { must: [{ key: 'policyId', match: { any: normalizedPolicyIds } }] },
+                with_payload: true,
+              })
+            : Promise.resolve([] as QdrantHit[]),
+        ]);
 
-        const searchResult = await this.qdrantClient.search(this.collectionName, {
-          vector: queryVector,
-          limit: 8,
-          filter,
-          with_payload: true,
-          score_threshold: 0.4,
+        const merged = this.mergeWithOntologyBoost(semanticHits, ontologyHits);
+
+        this.traceVectorSearch(traceId, 'Qdrant 일반 복지 검색', question, merged, {
+          mode: 'union+boost',
+          semanticHits: semanticHits.length,
+          ontologyCandidates: normalizedPolicyIds.length,
+          ontologyHits: ontologyHits.length,
         });
-
-        this.traceVectorSearch(traceId, 'Qdrant 일반 복지 검색', question, searchResult, filter);
 
         return {
           source: 'search_welfare',
           query: question,
           summary:
-            searchResult.length > 0
-              ? `일반 복지 정책 후보 ${searchResult.length}건을 찾았습니다.`
+            merged.length > 0
+              ? `일반 복지 정책 후보 ${merged.length}건을 찾았습니다.`
               : '관련 복지 정책을 찾지 못했습니다.',
-          items: searchResult.map((result, index) =>
+          items: merged.map((result, index) =>
             toRetrievalItem(result.payload ?? {}, result.score, index),
           ),
         };
@@ -366,6 +400,32 @@ export class VectorRetrievalService {
     });
 
     return value;
+  }
+
+  // 의미검색 결과와 온톨로지 후보를 합치고, 온톨로지에 속한 정책은 점수를
+  // 부스트해 상위로 끌어올린다. 점수(score)는 원래 코사인 유사도를 그대로 보존하고
+  // 정렬만 부스트된 순위(rank)로 한다.
+  private mergeWithOntologyBoost(semanticHits: QdrantHit[], ontologyHits: QdrantHit[]): QdrantHit[] {
+    const ontologyIds = new Set(ontologyHits.map((h) => String(h.id)));
+    const byKey = new Map<string, { hit: QdrantHit; rank: number }>();
+
+    const consider = (hit: QdrantHit) => {
+      const key = String(hit.id);
+      const base = hit.score ?? 0;
+      const rank = base + (ontologyIds.has(key) ? GENERAL_WELFARE_ONTOLOGY_BOOST : 0);
+      const prev = byKey.get(key);
+      if (!prev || rank > prev.rank) {
+        byKey.set(key, { hit, rank });
+      }
+    };
+
+    semanticHits.forEach(consider);
+    ontologyHits.forEach(consider);
+
+    return [...byKey.values()]
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, GENERAL_WELFARE_RESULT_LIMIT)
+      .map((entry) => entry.hit);
   }
 
   private async embedQueryCached(question: string, namespace: string) {

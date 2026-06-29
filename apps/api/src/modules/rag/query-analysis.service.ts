@@ -69,6 +69,40 @@ const EXPLICIT_HOUSING = /무주택|자가|전세 거주|월세 거주|임차|�
 const SPECIFIC_PROGRAM =
   /청년월세|청년도약계좌|청년수당|행복주택|국민임대|공공분양|신혼희망타운|버팀목|주거급여|기초연금|기초생활|의료급여|활동지원|복지관|주간보호|청약|지원금|수당|계좌|시설|센터/i;
 
+// 구체적으로 지목 가능한 정책·제도명만 모은 목록(generic 접미사 제외).
+// 검색 결과 신뢰도 판정용: 질문이 이 중 하나를 지목했는데 검색 결과에 그 이름이
+// 하나도 없으면 "엔티티 부재"로 보고 HITL 재질문으로 전환한다.
+const NAMED_PROGRAMS: readonly string[] = [
+  '기초연금',
+  '기초생활',
+  '생계급여',
+  '의료급여',
+  '주거급여',
+  '교육급여',
+  '청년수당',
+  '청년도약계좌',
+  '청년희망적금',
+  '청년월세',
+  '청년내일채움공제',
+  '행복주택',
+  '국민임대',
+  '공공분양',
+  '신혼희망타운',
+  '버팀목',
+  '디딤돌',
+  '근로장려금',
+  '자녀장려금',
+  '아동수당',
+  '부모급여',
+  '양육수당',
+  '장애인연금',
+  '장애수당',
+  '활동지원',
+  '노인일자리',
+  '국민취업지원',
+  '내일배움카드',
+];
+
 @Injectable()
 export class QueryAnalysisService {
   private extractDaysAhead(question: string) {
@@ -159,6 +193,12 @@ export class QueryAnalysisService {
     }
 
     return null;
+  }
+
+  // 질문에서 구체적으로 지목된 정책·제도명을 뽑는다. 검색 결과에 이 이름이
+  // 전혀 없으면 "물어본 걸 못 찾은" 저신뢰 상태로 판정한다.
+  extractNamedPrograms(question: string): string[] {
+    return [...new Set(NAMED_PROGRAMS.filter((program) => question.includes(program)))];
   }
 
   selectApplicationSources(input: { question: string; hasProfile: boolean }): ApplicationSource[] {

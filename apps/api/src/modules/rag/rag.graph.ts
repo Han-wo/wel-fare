@@ -8,6 +8,7 @@ import {
   HumanMessage,
   AIMessage,
   AIMessageChunk,
+  ToolMessage,
 } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
@@ -84,6 +85,10 @@ const GraphState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => null,
   }),
+  retrievalLowConfidence: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
 });
 
 type GraphStateType = typeof GraphState.State;
@@ -91,7 +96,10 @@ type GraphStateType = typeof GraphState.State;
 export interface RagGraphServices {
   queryAnalysis: Pick<
     QueryAnalysisService,
-    'resolveSearchPreRoute' | 'getClarificationRequest' | 'selectApplicationSources'
+    | 'resolveSearchPreRoute'
+    | 'getClarificationRequest'
+    | 'selectApplicationSources'
+    | 'extractNamedPrograms'
   >;
   hitlSuggestion: Pick<
     HitlSuggestionService,
@@ -673,6 +681,95 @@ export function createRagGraph(services: RagGraphServices) {
     return 'save_message';
   }
 
+  // 검색 직후 신뢰도 게이트: 질문이 특정 정책명을 지목했는데 도구 검색 결과 어디에도
+  // 그 이름이 없으면("엔티티 부재") 약한 답변 대신 HITL 재질문으로 전환한다.
+  // 점수 절대값은 한국어+임베딩 특성상 변별력이 약해 신호로 쓰지 않는다.
+  function assessRetrieval(state: GraphStateType): Partial<GraphStateType> {
+    const namedPrograms = services.queryAnalysis.extractNamedPrograms(state.question);
+    if (namedPrograms.length === 0) {
+      return { retrievalLowConfidence: false };
+    }
+
+    // 우발적 언급(예: "기초연금과 중복 불가")으로 오판하지 않도록, 검색된 문서의
+    // 정책명(title) 또는 본문의 구조화 마커 "[정책명] X" 에서만 엔티티를 찾는다.
+    // query/summary echo는 보지 않는다.
+    const titles: string[] = [];
+    const contents: string[] = [];
+    for (const message of state.messages) {
+      if (!(message instanceof ToolMessage)) continue;
+      try {
+        const parsed = JSON.parse(String(message.content)) as {
+          items?: Array<{ content?: unknown; title?: unknown }>;
+        };
+        for (const item of parsed.items ?? []) {
+          if (typeof item.title === 'string') titles.push(item.title);
+          if (typeof item.content === 'string') contents.push(item.content);
+        }
+      } catch {
+        contents.push(String(message.content));
+      }
+    }
+
+    const found = namedPrograms.some(
+      (program) =>
+        titles.some((title) => title.includes(program)) ||
+        contents.some((content) => new RegExp(`\\[정책명\\]\\s*${program}`).test(content)),
+    );
+
+    emitThink(state.traceId, {
+      phase: '검색 신뢰도 점검',
+      content: found
+        ? `지목된 정책(${namedPrograms.join(', ')})을 검색 결과에서 확인했습니다.`
+        : `지목된 정책(${namedPrograms.join(', ')})을 검색 결과에서 찾지 못해 재질문으로 전환합니다.`,
+      node: 'assess_retrieval',
+      status: 'done',
+    });
+
+    if (!found) {
+      services.recordEvent(state.traceId, {
+        type: 'decision',
+        title: '검색 신뢰도 부족 — HITL 전환',
+        detail: `질문이 지목한 정책(${namedPrograms.join(', ')})이 검색 결과에 없어 재질문합니다.`,
+        payload: { namedPrograms, reason: 'entity_absent' },
+      });
+    }
+
+    return { retrievalLowConfidence: !found };
+  }
+
+  function routeAfterAssess(state: GraphStateType): 'agent' | 'request_clarification' {
+    return state.retrievalLowConfidence ? 'request_clarification' : 'agent';
+  }
+
+  async function requestClarification(
+    state: GraphStateType,
+  ): Promise<Partial<GraphStateType>> {
+    const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
+      question: state.question,
+      profile: state.profile,
+      retrieval: null,
+    });
+
+    state.hitlCallback?.(questionnaire);
+
+    const message =
+      '요청하신 내용을 정확히 찾지 못했어요. 아래에서 조건을 골라주시면 그 기준으로 다시 찾아드릴게요.';
+    state.streamCallback?.(message);
+
+    return {
+      messages: [new AIMessage(message)],
+      answer: message,
+      skipSave: false,
+      hitlMeta: {
+        hitl: {
+          reason: 'retrieval_entity_absent',
+          questionnaireId: questionnaire.id,
+          source: 'assess_retrieval',
+        },
+      },
+    };
+  }
+
   async function verifyAnswer(state: GraphStateType): Promise<Partial<GraphStateType>> {
     const detection = detectAnswerNeedsHitl(state.answer);
     if (!detection.needsHitl) return {};
@@ -735,6 +832,8 @@ export function createRagGraph(services: RagGraphServices) {
     .addNode('pre_route', preRoute)
     .addNode('agent', agentNode)
     .addNode('tools', toolNode)
+    .addNode('assess_retrieval', assessRetrieval)
+    .addNode('request_clarification', requestClarification)
     .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
     .addEdge(START, 'load_context')
@@ -751,7 +850,12 @@ export function createRagGraph(services: RagGraphServices) {
       tools: 'tools',
       save_message: 'verify_answer',
     })
-    .addEdge('tools', 'agent')
+    .addEdge('tools', 'assess_retrieval')
+    .addConditionalEdges('assess_retrieval', routeAfterAssess, {
+      agent: 'agent',
+      request_clarification: 'request_clarification',
+    })
+    .addEdge('request_clarification', 'save_message')
     .addEdge('verify_answer', 'save_message')
     .addEdge('save_message', END)
     .compile();
