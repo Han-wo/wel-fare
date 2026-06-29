@@ -175,6 +175,18 @@ function serializeToolPayload(result: RetrievalResult | EligibilityRetrievalResu
   return JSON.stringify(toStructuredToolPayload(result));
 }
 
+// 근거에서 확인되지 않은 신청링크에 대한 사용자 보호 캐비엇. 답변을 차단하지 않고
+// 끝에 경고를 덧붙여, 가짜 신청 페이지로의 유도를 차단한다.
+function buildLinkCaveat(links: string[]): string {
+  return [
+    '',
+    '',
+    '> ⚠️ **확인 안내**: 아래 링크는 검색된 공식 근거에서 확인되지 않았습니다.',
+    '> 신청 전 반드시 정부24·복지로 등 공식 사이트에서 직접 확인하세요.',
+    ...links.map((url) => `> - ${url}`),
+  ].join('\n');
+}
+
 // 도구 실행 결과(ToolMessage)에서 검색된 문서만 모은다. payload의 query/summary
 // 에는 질문이 echo되므로 items의 title/content만 취한다.
 function collectRetrievedDocs(messages: BaseMessage[]): RetrievedDoc[] {
@@ -774,9 +786,11 @@ export function createRagGraph(services: RagGraphServices) {
   }
 
   async function verifyAnswer(state: GraphStateType): Promise<Partial<GraphStateType>> {
-    // 그라운딩 관찰: 답변의 신청링크/정책명이 실제 근거에 있는지 검사해 trace에
-    // 기록한다(차단하지 않음 — 환각 가시화용 관찰 레이어).
+    // 그라운딩 검증: 답변의 신청링크/정책명이 실제 근거에 있는지 검사한다.
+    // 근거 없는 신청링크는 사용자 보호를 위해 캐비엇을 덧붙인다(저위험 행동).
+    // 정책명/금액은 trace 기록만(관찰).
     const docs = collectRetrievedDocs(state.messages);
+    let answerOverride: string | undefined;
     if (state.answer && docs.length > 0) {
       const grounding = checkAnswerGrounding(state.answer, docs);
       if (!grounding.grounded) {
@@ -792,11 +806,19 @@ export function createRagGraph(services: RagGraphServices) {
           detail: '답변에 검색 근거로 뒷받침되지 않는 링크/정책명이 포함되어 있습니다.',
           payload: { ungrounded: grounding.ungrounded },
         });
+
+        if (grounding.ungrounded.links.length > 0) {
+          const caveat = buildLinkCaveat(grounding.ungrounded.links);
+          state.streamCallback?.(caveat);
+          answerOverride = state.answer + caveat;
+        }
       }
     }
 
     const detection = detectAnswerNeedsHitl(state.answer);
-    if (!detection.needsHitl) return {};
+    if (!detection.needsHitl) {
+      return answerOverride ? { answer: answerOverride } : {};
+    }
 
     emitThink(state.traceId, {
       phase: 'HITL 재질문 판단',
@@ -828,6 +850,7 @@ export function createRagGraph(services: RagGraphServices) {
     });
 
     return {
+      ...(answerOverride ? { answer: answerOverride } : {}),
       hitlMeta: {
         hitl: {
           reason: detection.reason,
