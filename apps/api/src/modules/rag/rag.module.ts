@@ -19,6 +19,7 @@ import { HitlSuggestionService } from './hitl-suggestion.service';
 import { NEO4J_DRIVER } from './rag.tokens';
 import { RagThinkingStreamService } from './rag-thinking-stream.service';
 import { UserProfile } from '../profile/entities/user-profile.entity';
+import { Policy } from '../policies/entities/policy.entity';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
 import { ChatModule } from '../chat/chat.module';
@@ -28,7 +29,7 @@ import { RagCacheService } from './rag-cache.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserProfile, ChatMessage, ChatSession, RagTrace, DataSyncLog]),
+    TypeOrmModule.forFeature([UserProfile, Policy, ChatMessage, ChatSession, RagTrace, DataSyncLog]),
     ConfigModule,
     ChatModule,
   ],
