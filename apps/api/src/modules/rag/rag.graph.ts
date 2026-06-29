@@ -24,6 +24,7 @@ import type { HitlQuestionnaire } from './hitl.types';
 import type { HitlSuggestionService } from './hitl-suggestion.service';
 import { detectAnswerNeedsHitl } from './hitl-detection';
 import { assessNamedProgramCoverage, type RetrievedDoc } from './retrieval-confidence';
+import { checkAnswerGrounding } from './answer-grounding';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -172,6 +173,29 @@ export interface RagGraphServices {
 function serializeToolPayload(result: RetrievalResult | EligibilityRetrievalResult) {
   // 들여쓰기 없이 직렬화해 LLM 입력 토큰을 ~30% 절감.
   return JSON.stringify(toStructuredToolPayload(result));
+}
+
+// 도구 실행 결과(ToolMessage)에서 검색된 문서만 모은다. payload의 query/summary
+// 에는 질문이 echo되므로 items의 title/content만 취한다.
+function collectRetrievedDocs(messages: BaseMessage[]): RetrievedDoc[] {
+  const docs: RetrievedDoc[] = [];
+  for (const message of messages) {
+    if (!(message instanceof ToolMessage)) continue;
+    try {
+      const parsed = JSON.parse(String(message.content)) as {
+        items?: Array<{ content?: unknown; title?: unknown }>;
+      };
+      for (const item of parsed.items ?? []) {
+        docs.push({
+          title: typeof item.title === 'string' ? item.title : null,
+          content: typeof item.content === 'string' ? item.content : null,
+        });
+      }
+    } catch {
+      docs.push({ content: String(message.content) });
+    }
+  }
+  return docs;
 }
 
 export function createRagGraph(services: RagGraphServices) {
@@ -691,25 +715,7 @@ export function createRagGraph(services: RagGraphServices) {
       return { retrievalLowConfidence: false };
     }
 
-    // 검색된 문서(items)만 모은다. payload의 query/summary에는 질문이 echo되므로 제외.
-    const docs: RetrievedDoc[] = [];
-    for (const message of state.messages) {
-      if (!(message instanceof ToolMessage)) continue;
-      try {
-        const parsed = JSON.parse(String(message.content)) as {
-          items?: Array<{ content?: unknown; title?: unknown }>;
-        };
-        for (const item of parsed.items ?? []) {
-          docs.push({
-            title: typeof item.title === 'string' ? item.title : null,
-            content: typeof item.content === 'string' ? item.content : null,
-          });
-        }
-      } catch {
-        docs.push({ content: String(message.content) });
-      }
-    }
-
+    const docs = collectRetrievedDocs(state.messages);
     const assessment = assessNamedProgramCoverage(namedPrograms, docs);
     const found = !assessment.lowConfidence;
 
@@ -768,6 +774,27 @@ export function createRagGraph(services: RagGraphServices) {
   }
 
   async function verifyAnswer(state: GraphStateType): Promise<Partial<GraphStateType>> {
+    // 그라운딩 관찰: 답변의 신청링크/정책명이 실제 근거에 있는지 검사해 trace에
+    // 기록한다(차단하지 않음 — 환각 가시화용 관찰 레이어).
+    const docs = collectRetrievedDocs(state.messages);
+    if (state.answer && docs.length > 0) {
+      const grounding = checkAnswerGrounding(state.answer, docs);
+      if (!grounding.grounded) {
+        emitThink(state.traceId, {
+          phase: '근거 검증',
+          content: `근거에 없는 주장 감지(링크 ${grounding.ungrounded.links.length}, 정책명 ${grounding.ungrounded.policyNames.length}).`,
+          node: 'verify_answer',
+          status: 'done',
+        });
+        services.recordEvent(state.traceId, {
+          type: 'error',
+          title: '답변 그라운딩 경고',
+          detail: '답변에 검색 근거로 뒷받침되지 않는 링크/정책명이 포함되어 있습니다.',
+          payload: { ungrounded: grounding.ungrounded },
+        });
+      }
+    }
+
     const detection = detectAnswerNeedsHitl(state.answer);
     if (!detection.needsHitl) return {};
 
