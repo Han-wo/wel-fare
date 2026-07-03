@@ -1,5 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { UserProfile } from '@welfare-ai/shared-types';
+import {
+  ROUTE_FALLBACK_CLASSIFIER,
+  type RouteFallbackClassifier,
+  type RouteTier,
+} from './route-fallback';
+import { getHitlFacts } from './profile-facts';
 
 export type RagRouteType = 'SEARCH' | 'ELIGIBILITY' | 'APPLICATION_ASSIST';
 
@@ -41,6 +47,10 @@ const ELIGIBILITY_INTENT =
   /받을 수 있|받을수있|자격(이|은|을)?|조건(이|은|을)?\s*(뭐|무엇|어떻|되는|맞|해당)|대상인지|해당되|가능한지|eligible/i;
 const APPLICATION_ASSIST_INTENT =
   /신청\s*(방법|절차|순서|링크|페이지)|어떻게\s*신청|신청하려면|준비\s*서류|필요\s*서류|준비물|제출\s*서류|다음\s*단계|뭐부터\s*해야/i;
+// 의도 정규식(위 둘)에는 안 걸렸지만 자격/신청 의도일 가능성이 있는 표현.
+// 이게 보이면 정규식 기본값(SEARCH) 대신 LLM 폴백에 라우팅을 위임한다.
+const INTENT_HINT =
+  /신청|자격|조건|가능|받(을|아|고|나|는)|수\s*있|서류|해당|대상|어떻게|될까|되나요|해야|절차/;
 
 const CLEAR_YOUTH =
   /청년수당|청년적금|청년도약계좌|청년희망적금|온통청년|청년내일채움|청년취업지원금|청년창업지원금|청년 정책 뭐|청년 지원금/;
@@ -105,6 +115,12 @@ const NAMED_PROGRAMS: readonly string[] = [
 
 @Injectable()
 export class QueryAnalysisService {
+  constructor(
+    @Optional()
+    @Inject(ROUTE_FALLBACK_CLASSIFIER)
+    private readonly routeFallback?: RouteFallbackClassifier | null,
+  ) {}
+
   private extractDaysAhead(question: string) {
     const match = question.match(
       /향후\s*(\d{1,2})\s*일|(\d{1,2})\s*일\s*기준|최대\s*(\d{1,2})\s*일/,
@@ -135,6 +151,54 @@ export class QueryAnalysisService {
     return {
       routeType: 'SEARCH',
       detail: '기본 검색형 질문으로 판단해 검색 ReAct 그래프로 라우팅했습니다.',
+    };
+  }
+
+  // 정규식 의도 매칭은 실패했지만 자격/신청 계열 표현이 남아 있는 질문인지.
+  // true면 SEARCH 기본값이 "확신"이 아니라 "모름"이므로 LLM 폴백 대상이다.
+  isRouteAmbiguous(question: string): boolean {
+    if (ELIGIBILITY_INTENT.test(question) || APPLICATION_ASSIST_INTENT.test(question)) {
+      return false;
+    }
+    return INTENT_HINT.test(question);
+  }
+
+  /**
+   * 2단 라우팅: 1단 정규식이 확신하면 그대로, 애매하면 LLM 폴백에 위임한다.
+   * 폴백 미설정/실패/타임아웃이면 기존 SEARCH 기본값으로 진행하므로 결과가
+   * 기존 resolveRoute보다 나빠질 수 없다.
+   */
+  async resolveRouteSmart(question: string): Promise<RagRouteDecision & { tier: RouteTier }> {
+    const regexDecision = this.resolveRoute(question);
+
+    if (regexDecision.routeType !== 'SEARCH') {
+      return { ...regexDecision, tier: 'regex' };
+    }
+
+    // pre-route 규칙이 도구를 확정한 질문은 SEARCH 확신 케이스다. "지금 신청
+    // 가능한 청약"처럼 힌트 단어가 있어도 폴백에 보내지 않아 fast path를 지킨다.
+    const preRoute = this.resolveSearchPreRoute({
+      question,
+      userId: 'route-check',
+      traceId: 'route-check',
+    });
+    if (preRoute || !this.routeFallback || !this.isRouteAmbiguous(question)) {
+      return { ...regexDecision, tier: 'regex' };
+    }
+
+    const fallback = await this.routeFallback.classify(question).catch(() => null);
+    if (fallback) {
+      return {
+        routeType: fallback.routeType,
+        detail: `정규식이 라우트를 확정하지 못해 LLM 폴백이 분류했습니다: ${fallback.reason}`,
+        tier: 'llm_fallback',
+      };
+    }
+
+    return {
+      ...regexDecision,
+      detail: `${regexDecision.detail} (LLM 폴백 불가 — 기본값 유지)`,
+      tier: 'regex_default',
     };
   }
 
@@ -234,15 +298,23 @@ export class QueryAnalysisService {
     const profile = input.profile;
     const missingFields: MissingField[] = [];
 
+    // 이전 대화(HITL)에서 확인된 사실. 정형 프로필이 비어 있어도 이미 답한
+    // 항목은 "있음"으로 인정해 세션을 넘어 같은 재질문을 반복하지 않는다.
+    const facts = getHitlFacts(profile);
+
     const hasSpecificProgram = SPECIFIC_PROGRAM.test(question) || !PRONOUN_POLICY.test(question);
     const hasRegion =
       Boolean(profile?.sidoCode || profile?.sigunguCode || profile?.dongName) ||
+      Boolean(facts.region) ||
       EXPLICIT_REGION.test(question);
-    const hasAge = Boolean(profile?.birthDate) || EXPLICIT_AGE.test(question);
+    const hasAge = Boolean(profile?.birthDate) || Boolean(facts.age) || EXPLICIT_AGE.test(question);
     const hasIncome =
-      Boolean(profile?.incomeBracket || profile?.annualIncome) || EXPLICIT_INCOME.test(question);
+      Boolean(profile?.incomeBracket || profile?.annualIncome) ||
+      Boolean(facts.income) ||
+      EXPLICIT_INCOME.test(question);
     const hasHousing =
       Boolean(profile?.isHomeowner !== undefined || profile?.householdType) ||
+      Boolean(facts.housing) ||
       EXPLICIT_HOUSING.test(question);
 
     const needsRegion = DEADLINE.test(question) || FACILITY.test(question);

@@ -25,6 +25,9 @@ import type { HitlSuggestionService } from './hitl-suggestion.service';
 import { detectAnswerNeedsHitl } from './hitl-detection';
 import { assessNamedProgramCoverage, type RetrievedDoc } from './retrieval-confidence';
 import { checkAnswerGrounding } from './answer-grounding';
+import { isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
+import { buildPendingHitlMeta } from './hitl-resume';
+import { formatHitlFactsLine } from './profile-facts';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -88,6 +91,12 @@ const GraphState = Annotation.Root({
     default: () => null,
   }),
   retrievalLowConfidence: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
+  // HITL 보충 답변으로 재개된 턴. 클래리피케이션을 이미 한 번 했으므로
+  // 이 턴에서는 재질문 없이 가진 정보로 끝까지 진행한다 (ask-at-most-once).
+  hitlResumed: Annotation<boolean>({
     reducer: (_current, next) => next,
     default: () => false,
   }),
@@ -540,6 +549,7 @@ export function createRagGraph(services: RagGraphServices) {
       message.role === 'user' ? new HumanMessage(message.content) : new AIMessage(message.content),
     );
 
+    const factsLine = formatHitlFactsLine(profile);
     const userContextMessage = new HumanMessage(
       [
         '## 오늘 날짜',
@@ -548,6 +558,7 @@ export function createRagGraph(services: RagGraphServices) {
         '## 사용자 정보',
         `- 나이: ${age}세 | 거주지: ${region} | 가구형태: ${profile?.householdType ?? '미입력'}`,
         `- 직업: ${profile?.occupationType ?? '미입력'} | 소득: 중위소득 ${profile?.incomeBracket ?? '미입력'}% 이하 | 주거: ${profile?.isHomeowner ? '자가' : '무주택/임차'}`,
+        ...(factsLine ? [factsLine] : []),
         `- userId: ${state.userId}`,
       ].join('\n'),
     );
@@ -584,6 +595,16 @@ export function createRagGraph(services: RagGraphServices) {
   }
 
   async function requestMissingInfo(state: GraphStateType): Promise<Partial<GraphStateType>> {
+    if (state.hitlResumed) {
+      emitThink(state.traceId, {
+        phase: '질문 점검',
+        content: '보충 답변을 반영해 재질문 없이 검색을 진행합니다.',
+        node: 'request_missing_info',
+        status: 'done',
+      });
+      return {};
+    }
+
     emitThink(state.traceId, {
       phase: '질문 점검',
       content: '질문에 필요한 정보가 충분한지 확인하는 중입니다.',
@@ -637,6 +658,14 @@ export function createRagGraph(services: RagGraphServices) {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
       skipSave: false,
+      hitlMeta: buildPendingHitlMeta({
+        originalQuestion: state.question,
+        routeType: 'SEARCH',
+        reason: 'missing_profile',
+        source: 'request_missing_info',
+        questionnaireId: questionnaire.id,
+        missingFields: clarification.missingFields,
+      }),
     };
   }
 
@@ -654,7 +683,37 @@ export function createRagGraph(services: RagGraphServices) {
       node: 'agent',
       status: 'active',
     });
-    const stream = await llmWithTools.stream(state.messages, {
+
+    // 예산 소진 시 도구를 떼어낸 LLM으로 전환해 텍스트 답변을 강제한다.
+    // tools 노드 이후에는 항상 agent(또는 clarification)로 돌아오므로 이 지점이
+    // 루프의 유일한 예산 집행 지점이다.
+    const budgetExhausted = isToolBudgetExhausted(state.messages);
+    if (budgetExhausted) {
+      services.recordEvent(state.traceId, {
+        type: 'decision',
+        title: '도구 호출 예산 소진',
+        detail: `도구 호출 ${MAX_TOOL_ROUNDS}라운드를 모두 사용해 수집된 근거만으로 답변을 생성합니다.`,
+        payload: { maxToolRounds: MAX_TOOL_ROUNDS },
+      });
+      emitThink(state.traceId, {
+        phase: '답변 전략 수립',
+        content: '도구 호출 한도에 도달해 지금까지 수집한 근거로 답변을 정리합니다.',
+        node: 'agent',
+        status: 'active',
+      });
+    }
+
+    const model = budgetExhausted ? llm : llmWithTools;
+    const input = budgetExhausted
+      ? [
+          ...state.messages,
+          new HumanMessage(
+            '도구 호출 한도에 도달했습니다. 추가 검색 없이 지금까지 검색된 근거만으로 최선의 답변을 작성하세요. 근거가 부족한 부분은 부족하다고 명시하세요.',
+          ),
+        ]
+      : state.messages;
+
+    const stream = await model.stream(input, {
       ...config,
       runName: 'welfare-react-agent',
       tags: ['welfare-ai', 'react', 'langgraph'],
@@ -753,6 +812,8 @@ export function createRagGraph(services: RagGraphServices) {
   }
 
   function routeAfterAssess(state: GraphStateType): 'agent' | 'request_clarification' {
+    // 재개된 턴은 저신뢰여도 재질문 루프 대신 가진 근거로 답변까지 진행한다.
+    if (state.hitlResumed) return 'agent';
     return state.retrievalLowConfidence ? 'request_clarification' : 'agent';
   }
 
@@ -775,13 +836,13 @@ export function createRagGraph(services: RagGraphServices) {
       messages: [new AIMessage(message)],
       answer: message,
       skipSave: false,
-      hitlMeta: {
-        hitl: {
-          reason: 'retrieval_entity_absent',
-          questionnaireId: questionnaire.id,
-          source: 'assess_retrieval',
-        },
-      },
+      hitlMeta: buildPendingHitlMeta({
+        originalQuestion: state.question,
+        routeType: 'SEARCH',
+        reason: 'retrieval_entity_absent',
+        source: 'assess_retrieval',
+        questionnaireId: questionnaire.id,
+      }),
     };
   }
 
@@ -816,7 +877,7 @@ export function createRagGraph(services: RagGraphServices) {
     }
 
     const detection = detectAnswerNeedsHitl(state.answer);
-    if (!detection.needsHitl) {
+    if (!detection.needsHitl || state.hitlResumed) {
       return answerOverride ? { answer: answerOverride } : {};
     }
 
@@ -851,13 +912,13 @@ export function createRagGraph(services: RagGraphServices) {
 
     return {
       ...(answerOverride ? { answer: answerOverride } : {}),
-      hitlMeta: {
-        hitl: {
-          reason: detection.reason,
-          questionnaireId: questionnaire.id,
-          source: 'verify_answer',
-        },
-      },
+      hitlMeta: buildPendingHitlMeta({
+        originalQuestion: state.question,
+        routeType: 'SEARCH',
+        reason: detection.reason ?? 'unknown',
+        source: 'verify_answer',
+        questionnaireId: questionnaire.id,
+      }),
     };
   }
 

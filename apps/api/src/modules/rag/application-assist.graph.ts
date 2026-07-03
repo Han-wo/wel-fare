@@ -14,6 +14,8 @@ import { combineRetrievalPromptBlocks, type RetrievalResult } from './retrieval.
 import { type RagGraphServices } from './rag.graph';
 import type { RagThinkPayload } from './thinking.types';
 import { detectAnswerNeedsHitl } from './hitl-detection';
+import { buildPendingHitlMeta } from './hitl-resume';
+import { formatHitlFactsLine } from './profile-facts';
 
 const APPLICATION_RETRIEVAL_MIN_AVG_SCORE = 0.35;
 
@@ -59,6 +61,11 @@ const GraphState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => null,
   }),
+  // HITL 보충 답변으로 재개된 턴 — 재질문 없이 끝까지 진행 (ask-at-most-once).
+  hitlResumed: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
   applicationContext: Annotation<string>(),
 });
 
@@ -71,6 +78,7 @@ function formatProfile(profile: UserProfile | null): string {
 
   const age = profile.birthDate ? `${calcAge(profile.birthDate)}세` : '미입력';
   const region = profile.sidoCode ? getSidoName(profile.sidoCode) : '미입력';
+  const factsLine = formatHitlFactsLine(profile);
 
   return [
     `- 나이: ${age}`,
@@ -79,6 +87,7 @@ function formatProfile(profile: UserProfile | null): string {
     `- 직업: ${profile.occupationType ?? '미입력'}`,
     `- 소득: 중위소득 ${profile.incomeBracket ?? '미입력'}% 이하`,
     `- 주거상태: ${profile.isHomeowner ? '자가' : '무주택/임차'}`,
+    ...(factsLine ? [factsLine] : []),
   ].join('\n');
 }
 
@@ -186,6 +195,16 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
   async function requestMissingInfo(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
+    if (state.hitlResumed) {
+      emitThink(state.traceId, {
+        phase: '질문 점검',
+        content: '보충 답변을 반영해 재질문 없이 신청 도움을 진행합니다.',
+        node: 'request_missing_info',
+        status: 'done',
+      });
+      return {};
+    }
+
     emitThink(state.traceId, {
       phase: '질문 점검',
       content: '신청 도움에 필요한 정보가 충분한지 확인하는 중입니다.',
@@ -239,6 +258,14 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
       skipSave: false,
+      hitlMeta: buildPendingHitlMeta({
+        originalQuestion: state.question,
+        routeType: 'APPLICATION_ASSIST',
+        reason: 'missing_profile',
+        source: 'request_missing_info',
+        questionnaireId: questionnaire.id,
+        missingFields: clarification.missingFields,
+      }),
     };
   }
 
@@ -311,7 +338,9 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     });
 
     const combined = combineRetrievalSummary(results);
-    if (isResultsInsufficient(combined)) {
+    // 재개된 턴은 근거가 약해도 재질문 대신 안내까지 진행한다. 시스템 프롬프트가
+    // 부족한 부분을 "공고문 확인 필요"로 명시하도록 이미 강제한다.
+    if (isResultsInsufficient(combined) && !state.hitlResumed) {
       const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
         question: state.question,
         profile: state.profile,
@@ -326,6 +355,13 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
         messages: [new AIMessage(message)],
         answer: message,
         skipSave: false,
+        hitlMeta: buildPendingHitlMeta({
+          originalQuestion: state.question,
+          routeType: 'APPLICATION_ASSIST',
+          reason: questionnaire.reason,
+          source: 'collect_application_context',
+          questionnaireId: questionnaire.id,
+        }),
       };
     }
 
@@ -358,7 +394,7 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
     const detection = detectAnswerNeedsHitl(state.answer);
-    if (!detection.needsHitl) return {};
+    if (!detection.needsHitl || state.hitlResumed) return {};
 
     const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
       question: state.question,
@@ -375,13 +411,13 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     });
 
     return {
-      hitlMeta: {
-        hitl: {
-          reason: detection.reason,
-          questionnaireId: questionnaire.id,
-          source: 'verify_answer',
-        },
-      },
+      hitlMeta: buildPendingHitlMeta({
+        originalQuestion: state.question,
+        routeType: 'APPLICATION_ASSIST',
+        reason: detection.reason ?? 'unknown',
+        source: 'verify_answer',
+        questionnaireId: questionnaire.id,
+      }),
     };
   }
 

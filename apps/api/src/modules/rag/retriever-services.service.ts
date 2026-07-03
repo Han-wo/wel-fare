@@ -15,6 +15,8 @@ import { PolicyGraphService } from './policy-graph.service';
 import { HousingGraphService } from './housing-graph.service';
 import { SuggestionService } from './suggestion.service';
 import { QueryAnalysisService } from './query-analysis.service';
+import { ProfileFactsService } from '../profile/profile-facts.service';
+import type { ProfileWithFacts } from './profile-facts';
 
 const GENERAL_WELFARE_RESULT_LIMIT = 8;
 const LEXICAL_MATCH_SCORE = 0.9; // 정책명 정확 매치 — 약한 벡터 점수 위로 올린다.
@@ -31,11 +33,20 @@ export class RetrieverServices {
     private readonly housingGraph: HousingGraphService,
     private readonly suggestionService: SuggestionService,
     private readonly queryAnalysis: QueryAnalysisService,
+    private readonly profileFacts: ProfileFactsService,
   ) {}
 
   async getProfile(userId: string): Promise<UserProfileType | null> {
     const profile = await this.profileRepo.findOne({ where: { userId } });
     if (!profile) return null;
+
+    // 대화(HITL)에서 확인된 사실을 얹는다. 정형 프로필이 비어 있어도 이전
+    // 세션에서 답한 지역/나이대 등으로 재질문을 피하고 컨텍스트를 보강한다.
+    const facts = await this.profileFacts.getFacts(userId).catch(() => ({}));
+    if (Object.keys(facts).length > 0) {
+      (profile as unknown as ProfileWithFacts).hitlFacts = facts;
+    }
+
     return profile as unknown as UserProfileType;
   }
 

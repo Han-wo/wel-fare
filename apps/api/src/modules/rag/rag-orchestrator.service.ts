@@ -7,7 +7,15 @@ import { createRagGraph, type RagGraphServices } from './rag.graph';
 import { createEligibilityGraph } from './eligibility.graph';
 import { createApplicationAssistGraph } from './application-assist.graph';
 import { RetrieverServices } from './retriever-services.service';
-import { QueryAnalysisService, type RagRouteType } from './query-analysis.service';
+import {
+  QueryAnalysisService,
+  type RagRouteDecision,
+  type RagRouteType,
+} from './query-analysis.service';
+import type { RouteTier } from './route-fallback';
+import { extractPendingHitl, resolveHitlResume } from './hitl-resume';
+import { parseSupplementFacts } from './profile-facts';
+import { ProfileFactsService } from '../profile/profile-facts.service';
 import { TraceFacade } from './trace-facade.service';
 import { StreamingService, type RagStreamEvent } from './streaming.service';
 import { RagThinkingStreamService } from './rag-thinking-stream.service';
@@ -39,6 +47,7 @@ export class RagOrchestratorService {
     private readonly chatRuntime: ChatRuntimeService,
     private readonly config: ConfigService,
     private readonly hitlSuggestion: HitlSuggestionService,
+    private readonly profileFacts: ProfileFactsService,
   ) {
     const services: RagGraphServices = {
       queryAnalysis: this.queryAnalysis,
@@ -116,10 +125,55 @@ export class RagOrchestratorService {
       question,
       model: this.config.get('OPENAI_CHAT_MODEL', 'gpt-5-mini'),
     });
-    const routeDecision = this.queryAnalysis.resolveRoute(question);
+    // 직전 턴이 HITL 클래리피케이션으로 끝났고 이번 메시지가 그 보충 답변이면,
+    // 재라우팅하지 않고 원래 질문·라우트를 복원해 이어서 실행한다.
+    const pendingHitl = await this.loadPendingHitl(sessionId);
+    const resume = resolveHitlResume(pendingHitl, question);
+
+    let routeDecision: RagRouteDecision & { tier: RouteTier };
+    let effectiveQuestion = question;
+
+    if (resume) {
+      effectiveQuestion = resume.effectiveQuestion;
+      routeDecision = {
+        routeType: resume.routeType,
+        detail: resume.skipped
+          ? 'HITL 재질문을 건너뛰어 원래 질문을 기존 정보로 재개합니다.'
+          : `HITL 보충 답변을 반영해 원래 질문을 재개합니다: ${resume.supplement}`,
+        tier: 'hitl_resume',
+      };
+      this.traceFacade.addEvent(traceId, {
+        type: 'decision',
+        title: 'HITL 재개',
+        detail: routeDecision.detail,
+        payload: {
+          originalQuestion: pendingHitl?.originalQuestion,
+          supplement: resume.supplement,
+          skipped: resume.skipped,
+          routeType: resume.routeType,
+          pendingSource: pendingHitl?.source,
+        },
+      });
+
+      // 보충 답변의 나이대/지역/소득/주거는 세션을 넘어 재사용하도록 승격한다.
+      // 저장 실패는 이번 턴 답변에 영향을 주지 않는다(다음 세션에 재질문될 뿐).
+      if (resume.supplement) {
+        const facts = parseSupplementFacts(resume.supplement);
+        if (Object.keys(facts).length > 0) {
+          try {
+            await this.profileFacts.upsertMany(userId, facts, { source: 'hitl', sessionId });
+          } catch (error) {
+            this.logger.warn(`프로필 사실 저장 실패: ${(error as Error).message}`);
+          }
+        }
+      }
+    } else {
+      routeDecision = await this.queryAnalysis.resolveRouteSmart(question);
+    }
+
     this.traceFacade.setRouteType(traceId, {
       routeType: routeDecision.routeType,
-      detail: routeDecision.detail,
+      detail: `[${routeDecision.tier}] ${routeDecision.detail}`,
     });
 
     const graph = this.getGraphForRoute(routeDecision.routeType);
@@ -162,13 +216,14 @@ export class RagOrchestratorService {
         try {
           const result = await graph.invoke(
             {
-              question,
+              question: effectiveQuestion,
               userId,
               sessionId,
               traceId,
               messages: [],
               profile: null,
               answer: '',
+              hitlResumed: Boolean(resume),
               streamCallback: (token: string) => {
                 void isClosed().then((closed) => {
                   if (!closed) {
@@ -234,6 +289,18 @@ export class RagOrchestratorService {
       default:
         return this.searchGraph;
     }
+  }
+
+  // 직전 assistant 메시지가 HITL 클래리피케이션이면 그 pending 컨텍스트를 돌려준다.
+  // 다른 메시지가 끼면(사용자가 새 질문을 한 뒤) 자연히 재개 대상에서 벗어난다.
+  private async loadPendingHitl(sessionId: string) {
+    const last = await this.messageRepo.findOne({
+      where: { sessionId },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!last || last.role !== 'assistant') return null;
+    return extractPendingHitl(last.ragContext);
   }
 
   private async loadChatHistory(sessionId: string) {
