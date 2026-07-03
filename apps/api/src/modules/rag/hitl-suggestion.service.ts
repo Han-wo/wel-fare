@@ -358,7 +358,7 @@ export class HitlSuggestionService {
       );
 
       return result.records
-        .map((record) => {
+        .map((record): HitlChoice | null => {
           const name = record.get('name') as string;
           const count = Number(record.get('policyCount') ?? 0);
           if (!name) return null;
@@ -366,7 +366,7 @@ export class HitlSuggestionService {
             id: name,
             label: name,
             description: count > 0 ? `관련 정책 ${count}건` : undefined,
-          } satisfies HitlChoice;
+          };
         })
         .filter((choice): choice is HitlChoice => choice !== null);
     } catch (error) {

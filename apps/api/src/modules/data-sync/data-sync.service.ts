@@ -500,7 +500,7 @@ export class DataSyncService {
     const actualMap = new Map(actualRows.map((row) => [row.seedKey, row]));
     const statusMap = new Map(sourceStatuses.map((row) => [row.seedKey, row]));
     const successMap = new Map(
-      successRows.map((row: Record<string, unknown>) => [
+      successRows.map((row: Record<string, unknown>): [string, Date | null] => [
         String(row.seedKey),
         this.parseDateValue(row.finishedAt),
       ]),

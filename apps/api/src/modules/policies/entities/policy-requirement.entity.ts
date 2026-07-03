@@ -24,19 +24,19 @@ export class PolicyRequirement {
   reqType: string;
 
   @Column({ nullable: true })
-  operator?: string;
+  operator?: string | null;
 
   @Column({ type: 'numeric', nullable: true })
-  minValue?: number;
+  minValue?: number | null;
 
   @Column({ type: 'numeric', nullable: true })
-  maxValue?: number;
+  maxValue?: number | null;
 
   @Column({ type: 'text', array: true, nullable: true })
-  valueList?: string[];
+  valueList?: string[] | null;
 
   @Column({ type: 'text', nullable: true })
-  description?: string;
+  description?: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

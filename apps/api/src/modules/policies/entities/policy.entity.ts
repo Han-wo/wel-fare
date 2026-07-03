@@ -14,7 +14,7 @@ export class Policy {
   id: string;
 
   @Column({ unique: true, nullable: true })
-  externalId?: string;
+  externalId?: string | null;
 
   @Column()
   source: string;
@@ -26,55 +26,55 @@ export class Policy {
   category: string;
 
   @Column({ nullable: true })
-  subcategory?: string;
+  subcategory?: string | null;
 
   @Column({ nullable: true })
-  provider?: string;
+  provider?: string | null;
 
   @Column({ type: 'text', nullable: true })
-  summary?: string;
+  summary?: string | null;
 
   @Column({ type: 'text', nullable: true })
-  content?: string;
+  content?: string | null;
 
   @Column({ type: 'text', nullable: true })
-  targetSummary?: string;
+  targetSummary?: string | null;
 
   @Column({ type: 'bigint', nullable: true })
-  benefitAmount?: number;
+  benefitAmount?: number | null;
 
   @Column({ nullable: true })
-  benefitType?: string;
+  benefitType?: string | null;
 
   @Column({ type: 'date', nullable: true })
-  applicationStart?: string;
+  applicationStart?: string | null;
 
   @Column({ type: 'date', nullable: true })
-  applicationEnd?: string;
+  applicationEnd?: string | null;
 
   @Column({ default: 'ACTIVE' })
   status: string;
 
   @Column({ nullable: true })
-  applyUrl?: string;
+  applyUrl?: string | null;
 
   @Column({ nullable: true })
-  contact?: string;
+  contact?: string | null;
 
   @Column({ type: 'text', array: true, nullable: true })
-  sidoCodes?: string[];
+  sidoCodes?: string[] | null;
 
   @Column({ type: 'text', array: true, nullable: true })
-  tags?: string[];
+  tags?: string[] | null;
 
   @Column({ type: 'jsonb', nullable: true })
-  rawData?: Record<string, unknown>;
+  rawData?: Record<string, unknown> | null;
 
   @Column({ nullable: true })
-  qdrantPointId?: string;
+  qdrantPointId?: string | null;
 
   @Column({ nullable: true })
-  neo4jNodeId?: string;
+  neo4jNodeId?: string | null;
 
   @Column({ default: 0 })
   viewCount: number;
@@ -92,5 +92,5 @@ export class Policy {
   updatedAt: Date;
 
   @Column({ nullable: true })
-  syncedAt?: Date;
+  syncedAt?: Date | null;
 }
