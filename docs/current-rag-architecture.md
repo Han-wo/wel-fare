@@ -316,3 +316,33 @@ data: {"eventType":"DONE"}
 > 아키텍처는 이제 충분히 안정적이고 확장 가능하다.  
 > 다음 우선순위는 구조 리팩토링보다 라우팅 품질과 회귀 테스트 체계다.
 
+## 11. 2026-07-03 하네스 구조 보강
+
+에이전트 하네스(Claude Code) 구조와의 비교에서 도출된 4가지 구조 보강.
+
+### 11.1 툴 루프 예산
+
+- [tool-budget.ts](../apps/api/src/modules/rag/tool-budget.ts)
+- Search 그래프 ReAct 루프에 명시적 상한(`MAX_TOOL_ROUNDS = 4`).
+- 소진 시 agent 노드가 도구 없는 LLM으로 전환해 수집된 근거만으로 답변을 강제하고, trace에 `도구 호출 예산 소진` decision 이벤트를 남긴다.
+
+### 11.2 2단 라우팅 (regex fast-path + LLM 폴백)
+
+- [route-fallback.ts](../apps/api/src/modules/rag/route-fallback.ts), [route-llm-fallback.service.ts](../apps/api/src/modules/rag/route-llm-fallback.service.ts)
+- `resolveRouteSmart()`: 의도 정규식/pre-route가 확신하면 기존 정규식 결과(tier `regex`), 의도 힌트만 있는 애매한 질문만 소형 모델(기본 `OPENAI_ROUTER_MODEL=gpt-5-nano`)에 3지선다 위임(tier `llm_fallback`).
+- 폴백 실패/타임아웃(`RAG_ROUTE_FALLBACK_TIMEOUT_MS`, 기본 2500ms)이면 기존 SEARCH 기본값(tier `regex_default`). `RAG_ROUTE_LLM_FALLBACK=off`로 비활성화.
+- eval 하네스는 여전히 1단 정규식만 검증하므로 결정적이다.
+
+### 11.3 HITL 중단-재개
+
+- [hitl-resume.ts](../apps/api/src/modules/rag/hitl-resume.ts)
+- 클래리피케이션으로 끝난 assistant 메시지의 `ragContext.hitl`에 원래 질문·라우트를 보존.
+- 다음 메시지가 HITL 보충 답변(패널 합성 문형 또는 짧은 필드형 자유 입력)이면 재라우팅 없이 원래 라우트 복원 + 질문 병합(`[사용자 보충 정보]`) + `hitlResumed`로 재질문 억제(ask-at-most-once).
+- checkpointer 대신 앱 레벨 재개를 쓰는 이유는 파일 상단 주석 참고(state 내 콜백 직렬화 불가, 1-depth 중단).
+
+### 11.4 대화 유래 프로필 메모리
+
+- [profile-facts.ts](../apps/api/src/modules/rag/profile-facts.ts), [profile-facts.service.ts](../apps/api/src/modules/profile/profile-facts.service.ts), `user_profile_facts` 테이블
+- HITL 보충 답변의 나이대/지역/소득/주거를 파싱해 세션 간 지속 저장.
+- `getProfile()`이 `hitlFacts`로 얹어, (1) `getClarificationRequest`가 이미 답한 필드를 재질문하지 않고 (2) 세 그래프의 LLM 컨텍스트에 `이전 대화에서 확인한 정보` 한 줄로 반영된다.
+
