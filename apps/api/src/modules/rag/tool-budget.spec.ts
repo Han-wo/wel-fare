@@ -1,6 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
-import { countToolCallRounds, isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
+import {
+  countToolCallRounds,
+  hasCalledTool,
+  isToolBudgetExhausted,
+  MAX_TOOL_ROUNDS,
+} from './tool-budget';
 
 const toolCallMessage = (name: string) =>
   new AIMessage({ content: '', tool_calls: [{ id: `call_${name}`, name, args: {} }] });
@@ -48,5 +53,16 @@ describe('tool-budget', () => {
   it('respects a custom cap', () => {
     expect(isToolBudgetExhausted([toolCallMessage('x')], 1)).toBe(true);
     expect(isToolBudgetExhausted([toolCallMessage('x')], 2)).toBe(false);
+  });
+
+  it('hasCalledTool은 특정 도구 호출 여부를 판별한다', () => {
+    const messages = [
+      new HumanMessage('질문'),
+      toolCallMessage('search_youth_policy'),
+      new ToolMessage({ content: '{}', tool_call_id: 'call_search_youth_policy' }),
+    ];
+
+    expect(hasCalledTool(messages, 'search_youth_policy')).toBe(true);
+    expect(hasCalledTool(messages, 'search_welfare')).toBe(false);
   });
 });

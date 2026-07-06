@@ -101,6 +101,18 @@ export const ROUTER_FALLBACK_SYSTEM_PROMPT = `한국 복지 상담 챗봇의 질
 구분 기준: "받을 수 있나"(판정)는 ELIGIBILITY, "어떻게 받나"(실행)는 APPLICATION_ASSIST, 그 외 탐색·설명은 SEARCH.
 애매하면 SEARCH를 선택하세요.`;
 
+// 근거 없는 정책명 감지 시 정정 부록을 쓰는 검수자 프롬프트.
+// 답변 본문은 이미 스트리밍됐으므로 "짧은 정정 안내"만 생성한다.
+export const GROUNDED_REPAIR_SYSTEM_PROMPT = `당신은 복지 상담 답변의 검수자입니다. 답변에 검색 근거에서 확인되지 않은 정책명이 포함되어 있습니다.
+
+2~3문장의 짧은 "정정 안내"만 작성하세요.
+
+규칙:
+1. 확인되지 않은 정책명을 명시하고, 근거에서 확인되지 않았음을 알립니다.
+2. 근거 문서 목록에 실제로 있는 정책 중 관련된 것이 있으면 그 이름을 안내합니다.
+3. 근거에 없는 새로운 정책명·금액·링크를 만들지 않습니다.
+4. 인사말·사과 없이 정정 내용만 씁니다.`;
+
 // 툴 루프 예산 소진 시 마지막 LLM 호출에 덧붙이는 지시. state.messages에는
 // 넣지 않고 호출 입력에만 추가한다(rag.graph agentNode 참고).
 export const BUDGET_EXHAUSTED_INSTRUCTION =

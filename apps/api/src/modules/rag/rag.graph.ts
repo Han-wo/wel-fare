@@ -25,12 +25,21 @@ import type { HitlSuggestionService } from './hitl-suggestion.service';
 import { detectAnswerNeedsHitl } from './hitl-detection';
 import { assessNamedProgramCoverage, type RetrievedDoc } from './retrieval-confidence';
 import { checkAnswerGrounding } from './answer-grounding';
-import { isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
+import { hasCalledTool, isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
 import { buildPendingHitlMeta } from './hitl-resume';
 import { formatHitlFactsLine } from './profile-facts';
 // 동적 사용자 정보(오늘 날짜/age/region/userId)는 별도 메시지로 분리해 prompt caching 적중률을 높인다.
-import { BUDGET_EXHAUSTED_INSTRUCTION, SEARCH_SYSTEM_PROMPT } from './prompts';
+import {
+  BUDGET_EXHAUSTED_INSTRUCTION,
+  GROUNDED_REPAIR_SYSTEM_PROMPT,
+  SEARCH_SYSTEM_PROMPT,
+} from './prompts';
 import { checkSearchAnswerFormat } from './answer-format';
+import {
+  buildDeterministicPolicyCorrection,
+  buildDocsDigest,
+  formatCorrectionAppendix,
+} from './grounded-repair';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -62,6 +71,11 @@ const GraphState = Annotation.Root({
   // HITL 보충 답변으로 재개된 턴. 클래리피케이션을 이미 한 번 했으므로
   // 이 턴에서는 재질문 없이 가진 정보로 끝까지 진행한다 (ask-at-most-once).
   hitlResumed: Annotation<boolean>({
+    reducer: (_current, next) => next,
+    default: () => false,
+  }),
+  // 저신뢰 검색에 대한 기계 재시도(retry_search)는 턴당 1회만.
+  retrievalRetryDone: Annotation<boolean>({
     reducer: (_current, next) => next,
     default: () => false,
   }),
@@ -133,7 +147,7 @@ export interface RagGraphServices {
   recordToolSelection: (
     traceId: string,
     input: {
-      source: 'PRE_ROUTE' | 'AGENT';
+      source: 'PRE_ROUTE' | 'AGENT' | 'RETRY';
       toolName: string;
       args: Record<string, unknown>;
       detail: string;
@@ -771,10 +785,60 @@ export function createRagGraph(services: RagGraphServices) {
     return { retrievalLowConfidence: !found };
   }
 
-  function routeAfterAssess(state: GraphStateType): 'agent' | 'request_clarification' {
+  function routeAfterAssess(
+    state: GraphStateType,
+  ): 'agent' | 'request_clarification' | 'retry_search' {
     // 재개된 턴은 저신뢰여도 재질문 루프 대신 가진 근거로 답변까지 진행한다.
     if (state.hitlResumed) return 'agent';
-    return state.retrievalLowConfidence ? 'request_clarification' : 'agent';
+    if (!state.retrievalLowConfidence) return 'agent';
+
+    // 사용자를 부르기 전에 기계가 먼저 1회 재시도한다. search_welfare의
+    // 렉시컬 arm이 정책명 정확 매치를 하므로, 아직 안 불렀다면 그쪽에서
+    // 지목된 정책을 찾을 가능성이 있다. 이미 불렀다면 재시도 무의미 → HITL.
+    if (!state.retrievalRetryDone && !hasCalledTool(state.messages, 'search_welfare')) {
+      return 'retry_search';
+    }
+    return 'request_clarification';
+  }
+
+  // 저신뢰 검색의 기계 재시도: 정책명 정확 매치(렉시컬 arm)를 가진
+  // search_welfare로 원 질문을 재검색한다. LLM 없이 결정적으로 동작한다.
+  function retrySearch(state: GraphStateType): Partial<GraphStateType> {
+    emitThink(state.traceId, {
+      phase: '검색 재시도',
+      content: '지목된 정책을 찾지 못해 통합 복지 검색으로 한 번 더 찾아봅니다.',
+      node: 'retry_search',
+      status: 'active',
+    });
+
+    services.recordEvent(state.traceId, {
+      type: 'decision',
+      title: '검색 재시도',
+      detail: '지목된 정책이 검색 결과에 없어 search_welfare(렉시컬 매치 포함)로 재검색합니다.',
+      payload: { toolName: 'search_welfare' },
+    });
+    services.recordToolSelection(state.traceId, {
+      source: 'RETRY',
+      toolName: 'search_welfare',
+      args: { question: state.question },
+      detail: '저신뢰 검색 재시도가 search_welfare를 선택했습니다.',
+    });
+
+    return {
+      retrievalRetryDone: true,
+      messages: [
+        new AIMessage({
+          content: '',
+          tool_calls: [
+            {
+              id: uid(),
+              name: 'search_welfare',
+              args: { question: state.question, userId: state.userId },
+            },
+          ],
+        }),
+      ],
+    };
   }
 
   async function requestClarification(
@@ -806,6 +870,55 @@ export function createRagGraph(services: RagGraphServices) {
     };
   }
 
+  const REPAIR_TIMEOUT_MS = 6000;
+
+  // 근거 없는 정책명에 대한 정정 부록 생성. LLM 실패/타임아웃 시 결정적 문구.
+  async function buildRepairAppendix(
+    answer: string,
+    ungroundedPolicyNames: string[],
+    docs: RetrievedDoc[],
+  ): Promise<{ text: string; mode: 'llm' | 'deterministic' }> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), REPAIR_TIMEOUT_MS);
+    });
+
+    try {
+      const result = await Promise.race([
+        llm.invoke([
+          new SystemMessage(GROUNDED_REPAIR_SYSTEM_PROMPT),
+          new HumanMessage(
+            [
+              '## 근거 문서 목록',
+              buildDocsDigest(docs.map((doc) => doc.title)),
+              '',
+              '## 확인되지 않은 정책명',
+              ungroundedPolicyNames.map((name) => `- ${name}`).join('\n'),
+              '',
+              '## 답변 끝부분',
+              answer.slice(-1500),
+            ].join('\n'),
+          ),
+        ]),
+        timeout,
+      ]);
+
+      const text = typeof result?.content === 'string' ? result.content.trim() : '';
+      if (text) {
+        return { text: formatCorrectionAppendix(text), mode: 'llm' };
+      }
+    } catch {
+      // 아래 결정적 폴백으로 진행한다.
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    return {
+      text: buildDeterministicPolicyCorrection(ungroundedPolicyNames),
+      mode: 'deterministic',
+    };
+  }
+
   async function verifyAnswer(state: GraphStateType): Promise<Partial<GraphStateType>> {
     // 그라운딩 검증: 답변의 신청링크/정책명이 실제 근거에 있는지 검사한다.
     // 근거 없는 신청링크는 사용자 보호를 위해 캐비엇을 덧붙인다(저위험 행동).
@@ -832,6 +945,25 @@ export function createRagGraph(services: RagGraphServices) {
           const caveat = buildLinkCaveat(grounding.ungrounded.links);
           state.streamCallback?.(caveat);
           answerOverride = state.answer + caveat;
+        }
+
+        // 근거 없는 정책명: 본문은 이미 스트리밍됐으므로 정정 부록을 덧붙인다.
+        // LLM 정정이 실패하면 결정적 문구로 폴백 — 어느 쪽이든 부록은 나간다.
+        if (grounding.ungrounded.policyNames.length > 0) {
+          const appendix = await buildRepairAppendix(
+            state.answer,
+            grounding.ungrounded.policyNames,
+            docs,
+          );
+          state.streamCallback?.(appendix.text);
+          answerOverride = (answerOverride ?? state.answer) + appendix.text;
+
+          services.recordEvent(state.traceId, {
+            type: 'decision',
+            title: '답변 정정 부록',
+            detail: `근거 없는 정책명 ${grounding.ungrounded.policyNames.length}건에 정정 안내를 덧붙였습니다.`,
+            payload: { policyNames: grounding.ungrounded.policyNames, mode: appendix.mode },
+          });
         }
       }
     }
@@ -915,6 +1047,7 @@ export function createRagGraph(services: RagGraphServices) {
     .addNode('agent', agentNode)
     .addNode('tools', toolNode)
     .addNode('assess_retrieval', assessRetrieval)
+    .addNode('retry_search', retrySearch)
     .addNode('request_clarification', requestClarification)
     .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
@@ -935,8 +1068,10 @@ export function createRagGraph(services: RagGraphServices) {
     .addEdge('tools', 'assess_retrieval')
     .addConditionalEdges('assess_retrieval', routeAfterAssess, {
       agent: 'agent',
+      retry_search: 'retry_search',
       request_clarification: 'request_clarification',
     })
+    .addEdge('retry_search', 'tools')
     .addEdge('request_clarification', 'save_message')
     .addEdge('verify_answer', 'save_message')
     .addEdge('save_message', END)

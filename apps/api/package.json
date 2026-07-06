@@ -13,6 +13,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "eval": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node src/modules/rag/eval/run-all-evals.ts",
     "rag:hallucination": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/modules/rag/eval/hallucination-report.ts",
+    "rag:quality": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/modules/rag/eval/quality-report.ts",
     "eval:routing": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node src/modules/rag/eval/run-routing-eval.ts",
     "db:migrate": "TS_NODE_PROJECT=tsconfig.scripts.json node -r dotenv/config -r ts-node/register/transpile-only -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/database/data-source.ts",
     "db:migrate:create": "typeorm migration:create src/database/migrations/migration",

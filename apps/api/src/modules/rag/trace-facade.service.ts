@@ -51,7 +51,7 @@ export class TraceFacade {
   recordToolSelection(
     traceId: string,
     input: {
-      source: 'PRE_ROUTE' | 'AGENT';
+      source: 'PRE_ROUTE' | 'AGENT' | 'RETRY';
       toolName: string;
       args: Record<string, unknown>;
       detail: string;

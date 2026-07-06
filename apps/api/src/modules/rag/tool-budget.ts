@@ -24,3 +24,12 @@ export function isToolBudgetExhausted(
 ): boolean {
   return countToolCallRounds(messages) >= maxRounds;
 }
+
+// 이번 턴에서 특정 도구가 이미 호출됐는지. 검색 재시도(retry_search)가
+// 같은 도구를 무의미하게 반복하지 않도록 게이트한다.
+export function hasCalledTool(messages: BaseMessage[], toolName: string): boolean {
+  return messages.some((message) => {
+    const toolCalls = (message as AIMessage).tool_calls;
+    return Array.isArray(toolCalls) && toolCalls.some((call) => call.name === toolName);
+  });
+}
