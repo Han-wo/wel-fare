@@ -28,46 +28,11 @@ import { checkAnswerGrounding } from './answer-grounding';
 import { isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
 import { buildPendingHitlMeta } from './hitl-resume';
 import { formatHitlFactsLine } from './profile-facts';
+// 동적 사용자 정보(오늘 날짜/age/region/userId)는 별도 메시지로 분리해 prompt caching 적중률을 높인다.
+import { BUDGET_EXHAUSTED_INSTRUCTION, SEARCH_SYSTEM_PROMPT } from './prompts';
+import { checkSearchAnswerFormat } from './answer-format';
 
 const uid = () => `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-
-// 동적 사용자 정보(오늘 날짜/age/region/userId)는 별도 메시지로 분리해 prompt caching 적중률을 높인다.
-const SEARCH_SYSTEM_PROMPT = `당신은 대한민국 복지·지원금 정책 전문 AI 컨설턴트입니다. 사용자 맞춤 정책을 찾아 신청까지 도와줍니다.
-
-## 도구 출력 규칙
-도구 출력은 JSON 구조입니다.
-- summary: 검색 요약
-- graphSummary: 그래프 보강 요약
-- items[]: 실제 근거 문서
-- items[].content: 답변 근거로 직접 인용 가능한 원문
-
-## 도구 사용 규칙
-질문이 복합적이면 여러 도구를 동시에 호출하세요.
-- 일반 복지·수당·급여·서비스: search_welfare
-- 청년 전용: search_youth_policy
-- 청약·분양 공고·청약 일정: search_housing_subscription
-- 전세·월세 지원·LH임대·주거급여: search_rental_support
-- 복지 시설·기관 위치: search_welfare_facility
-- 특정 정책 자격 확인: check_policy_eligibility
-- 지금 신청 가능한 청약: get_upcoming_deadlines
-
-## 정확도 규칙
-1. 검색 결과 JSON에 있는 내용만 답변합니다. 없는 내용은 추측하지 않습니다.
-2. 정책명·금액·신청링크는 items[].content와 metadata에 있는 원문만 사용합니다.
-3. 검색 결과가 없으면 찾지 못했다고 답하고, 필요한 추가 조건을 안내합니다.
-4. 사용자 조건과 맞지 않는 정책은 제외하거나 조건 불일치를 명시합니다.
-
-## 답변 형식
-### 📋 [정책명]
-- **지원내용**: 구체적인 금액·서비스
-- **신청대상**: 조건 요약
-- **신청방법**: 온라인/방문/전화 등
-- **신청링크**: [바로 신청하기](URL)
-- **문의**: 담당기관·전화번호 (있는 경우)
-
-정책 여러 개면 사용자 조건에 가장 부합하는 것부터 안내합니다.
-마감일이 있으면 **굵게 강조**하고, 이미 종료된 청약은 "접수 종료"를 명시합니다.
-마지막에 반드시 "💡 **핵심 요약**: ..." 한 줄을 추가합니다.`;
 
 const GraphState = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
@@ -260,7 +225,7 @@ export function createRagGraph(services: RagGraphServices) {
     {
       name: 'search_welfare',
       description:
-        '일반 복지 정책, 수당, 급여, 지원금, 서비스를 검색합니다. 기초생활보장, 의료급여, 장애인 지원, 아동·보육, 교육비 지원, 취업지원, 노인 복지 등에 사용합니다.',
+        '일반 복지 정책, 수당, 급여, 지원금, 서비스를 검색합니다. 기초생활보장, 의료급여, 장애인 지원, 아동·보육, 교육비 지원, 취업지원, 노인 복지 등 "어떤 정책이 있는지" 찾는 단계에 사용합니다. 예: "장애인 지원 뭐 있어?", "출산 지원금 알려줘". 특정 정책명의 자격 확인이 목적이면 check_policy_eligibility를 사용합니다.',
       schema: z.object({
         question: z.string(),
         userId: z.string(),
@@ -292,7 +257,7 @@ export function createRagGraph(services: RagGraphServices) {
     {
       name: 'search_youth_policy',
       description:
-        '청년(만 19~34세) 전용 정책을 검색합니다. 청년수당, 청년월세, 청년도약계좌, 청년 취업·창업 지원 등을 찾을 때 사용합니다.',
+        '청년(만 19~34세) 전용 정책을 검색합니다. 청년수당, 청년월세, 청년도약계좌, 청년 취업·창업 지원 등을 찾을 때 사용합니다. 예: "청년 정책 뭐 있어?". 청년+청약처럼 주거 공고와 겹치는 질문이면 search_housing_subscription과 함께 호출합니다.',
       schema: z.object({
         question: z.string(),
       }),
@@ -429,7 +394,7 @@ export function createRagGraph(services: RagGraphServices) {
     {
       name: 'check_policy_eligibility',
       description:
-        '특정 정책의 신청 자격 조건과 상세 내용을 구조화해 조회합니다. "내가 이 정책 받을 수 있어?"처럼 특정 정책명이 언급될 때 사용합니다.',
+        '특정 정책의 신청 자격 조건과 상세 내용을 구조화해 조회합니다. "내가 청년월세 받을 수 있어?"처럼 질문에 특정 정책명이 있고 자격·조건 확인이 목적일 때 사용합니다. 정책을 탐색하는 단계라면 search_welfare를 사용합니다.',
       schema: z.object({
         policy_name: z.string(),
         userId: z.string(),
@@ -705,12 +670,7 @@ export function createRagGraph(services: RagGraphServices) {
 
     const model = budgetExhausted ? llm : llmWithTools;
     const input = budgetExhausted
-      ? [
-          ...state.messages,
-          new HumanMessage(
-            '도구 호출 한도에 도달했습니다. 추가 검색 없이 지금까지 검색된 근거만으로 최선의 답변을 작성하세요. 근거가 부족한 부분은 부족하다고 명시하세요.',
-          ),
-        ]
+      ? [...state.messages, new HumanMessage(BUDGET_EXHAUSTED_INSTRUCTION)]
       : state.messages;
 
     const stream = await model.stream(input, {
@@ -873,6 +833,20 @@ export function createRagGraph(services: RagGraphServices) {
           state.streamCallback?.(caveat);
           answerOverride = state.answer + caveat;
         }
+      }
+    }
+
+    // 형식 준수 관찰(차단 없음): 프롬프트 변경이 형식 준수율에 미치는 영향을
+    // rag_traces 집계로 추적한다.
+    if (state.answer) {
+      const format = checkSearchAnswerFormat(state.answer);
+      if (!format.compliant) {
+        services.recordEvent(state.traceId, {
+          type: 'decision',
+          title: '답변 형식 경고',
+          detail: format.violations.join(', '),
+          payload: { route: 'SEARCH', violations: format.violations },
+        });
       }
     }
 

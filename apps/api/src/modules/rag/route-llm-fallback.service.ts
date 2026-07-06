@@ -3,19 +3,12 @@ import { ChatOpenAI } from '@langchain/openai';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { RouteFallbackClassifier, RouteFallbackResult } from './route-fallback';
+import { ROUTER_FALLBACK_SYSTEM_PROMPT } from './prompts';
 
 const ROUTE_SCHEMA = z.object({
   route: z.enum(['SEARCH', 'ELIGIBILITY', 'APPLICATION_ASSIST']),
   reason: z.string().describe('선택 근거 한 문장 (한국어)'),
 });
-
-const ROUTER_SYSTEM_PROMPT = `한국 복지 상담 챗봇의 질문 분류기입니다. 사용자 질문을 정확히 하나의 워크플로우로 분류하세요.
-
-- SEARCH: 정책·지원금·공고·시설을 찾거나 설명을 원하는 질문. 예: "청년 지원금 뭐 있어?", "행복주택 알려줘"
-- ELIGIBILITY: 특정 조건/본인이 받을 수 있는지, 자격·대상 여부를 판정해달라는 질문. 예: "만 27세인데 청년도약계좌 들 수 있을까?", "우리 가족도 해당돼?"
-- APPLICATION_ASSIST: 신청 방법·절차·서류·다음 단계 등 실행을 돕는 질문. 예: "뭐부터 준비하면 돼?", "서류 뭐 내야 해?"
-
-애매하면 SEARCH를 선택하세요.`;
 
 // 라우팅은 스트리밍 시작 전에 실행되므로 TTFB에 직접 더해진다. 이 시간을 넘기면
 // 분류를 포기하고 정규식 기본값(SEARCH)으로 진행한다.
@@ -43,7 +36,7 @@ export class RouteLlmFallbackService implements RouteFallbackClassifier {
     try {
       const result = await Promise.race([
         this.classifier.invoke([
-          new SystemMessage(ROUTER_SYSTEM_PROMPT),
+          new SystemMessage(ROUTER_FALLBACK_SYSTEM_PROMPT),
           new HumanMessage(question),
         ]),
         timeout,

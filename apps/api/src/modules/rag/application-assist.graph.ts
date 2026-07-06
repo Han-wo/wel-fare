@@ -16,6 +16,8 @@ import type { RagThinkPayload } from './thinking.types';
 import { detectAnswerNeedsHitl } from './hitl-detection';
 import { buildPendingHitlMeta } from './hitl-resume';
 import { formatHitlFactsLine } from './profile-facts';
+import { APPLICATION_ASSIST_SYSTEM_PROMPT } from './prompts';
+import { checkApplicationAnswerFormat } from './answer-format';
 
 const APPLICATION_RETRIEVAL_MIN_AVG_SCORE = 0.35;
 
@@ -169,15 +171,6 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       services.loadHistory(state.sessionId),
     ]);
 
-    const systemPrompt = `당신은 대한민국 복지 신청 도우미입니다.
-
-반드시 아래 원칙을 지킵니다.
-1. 검색 결과에 있는 내용만 사용합니다. 없는 서류나 절차를 만들지 않습니다.
-2. 답변은 실행 중심으로 씁니다.
-3. 다음 순서로 정리합니다: 신청 대상, 신청 순서, 준비 서류, 확인할 마감/주의사항, 링크/문의처.
-4. 정보가 부족하면 "공고문 확인 필요"를 분명하게 적습니다.
-5. 마지막에 "바로 할 일" 2~3개를 짧게 정리합니다.`;
-
     const historyMessages: BaseMessage[] = rawHistory.map((message) =>
       message.role === 'user' ? new HumanMessage(message.content) : new AIMessage(message.content),
     );
@@ -185,7 +178,7 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     return {
       profile,
       messages: [
-        new SystemMessage(systemPrompt),
+        new SystemMessage(APPLICATION_ASSIST_SYSTEM_PROMPT),
         ...historyMessages,
         new HumanMessage(state.question),
       ],
@@ -393,6 +386,19 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
   async function verifyAnswer(
     state: ApplicationGraphState,
   ): Promise<Partial<ApplicationGraphState>> {
+    // 형식 준수 관찰(차단 없음): 실행 가이드 구조 계약을 지켰는지 trace에 남긴다.
+    if (state.answer) {
+      const format = checkApplicationAnswerFormat(state.answer);
+      if (!format.compliant) {
+        services.recordEvent(state.traceId, {
+          type: 'decision',
+          title: '답변 형식 경고',
+          detail: format.violations.join(', '),
+          payload: { route: 'APPLICATION_ASSIST', violations: format.violations },
+        });
+      }
+    }
+
     const detection = detectAnswerNeedsHitl(state.answer);
     if (!detection.needsHitl || state.hitlResumed) return {};
 

@@ -17,6 +17,8 @@ import type { RagThinkPayload } from './thinking.types';
 import { detectAnswerNeedsHitl } from './hitl-detection';
 import { buildPendingHitlMeta } from './hitl-resume';
 import { formatHitlFactsLine } from './profile-facts';
+import { ELIGIBILITY_SYSTEM_PROMPT } from './prompts';
+import { checkEligibilityAnswerFormat } from './answer-format';
 
 const RETRIEVAL_MIN_AVG_SCORE = 0.35;
 
@@ -146,15 +148,6 @@ export function createEligibilityGraph(services: RagGraphServices) {
       services.loadHistory(state.sessionId),
     ]);
 
-    const systemPrompt = `당신은 대한민국 복지 정책 적격성 판정 도우미입니다.
-
-반드시 아래 원칙을 지킵니다.
-1. 제공된 사용자 프로필과 검색된 정책 문서만 근거로 판단합니다.
-2. 정보가 부족하면 추측하지 말고 "불확실"로 두고 추가 확인 항목을 적습니다.
-3. 답변 첫 줄에 반드시 다음 셋 중 하나를 씁니다: [가능], [불확실], [어려움]
-4. 신청 가능성 판단 뒤에는 근거, 확인 필요 정보, 다음 단계 순서로 답합니다.
-5. 링크나 조건은 검색 결과에 있는 내용만 씁니다.`;
-
     const historyMessages: BaseMessage[] = rawHistory.map((message) =>
       message.role === 'user' ? new HumanMessage(message.content) : new AIMessage(message.content),
     );
@@ -162,7 +155,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
     return {
       profile,
       messages: [
-        new SystemMessage(systemPrompt),
+        new SystemMessage(ELIGIBILITY_SYSTEM_PROMPT),
         ...historyMessages,
         new HumanMessage(state.question),
       ],
@@ -351,6 +344,19 @@ export function createEligibilityGraph(services: RagGraphServices) {
   async function verifyAnswer(
     state: EligibilityGraphState,
   ): Promise<Partial<EligibilityGraphState>> {
+    // 형식 준수 관찰(차단 없음): 첫 줄 판정 태그 계약을 지켰는지 trace에 남긴다.
+    if (state.answer) {
+      const format = checkEligibilityAnswerFormat(state.answer);
+      if (!format.compliant) {
+        services.recordEvent(state.traceId, {
+          type: 'decision',
+          title: '답변 형식 경고',
+          detail: format.violations.join(', '),
+          payload: { route: 'ELIGIBILITY', violations: format.violations },
+        });
+      }
+    }
+
     const detection = detectAnswerNeedsHitl(state.answer);
     if (!detection.needsHitl || state.hitlResumed) return {};
 
