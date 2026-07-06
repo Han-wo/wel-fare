@@ -230,4 +230,37 @@ export const ROUTING_GOLDEN: RoutingGoldenCase[] = [
     expectedRoute: 'APPLICATION_ASSIST',
     tags: ['application', 'rental'],
   },
+
+  // --- POST_APPLICATION: 신청 이후 (사후관리) ---
+  {
+    id: 'post-result-when',
+    question: '청년월세 신청했는데 결과 언제 나와요?',
+    expectedRoute: 'POST_APPLICATION',
+    tags: ['post-application'],
+  },
+  {
+    id: 'post-rejected',
+    question: '서류 반려됐는데 어떡해요?',
+    expectedRoute: 'POST_APPLICATION',
+    tags: ['post-application'],
+  },
+  {
+    id: 'post-appeal',
+    question: '떨어졌는데 이의신청 할 수 있어요?',
+    expectedRoute: 'POST_APPLICATION',
+    tags: ['post-application'],
+  },
+  {
+    id: 'post-review-period',
+    question: '주거급여 심사 기간 얼마나 걸려?',
+    expectedRoute: 'POST_APPLICATION',
+    tags: ['post-application', 'rental'],
+  },
+  {
+    id: 'post-rejected-eligibility-conflict',
+    // "받을 수 있어"가 있지만 신청 이후 문맥이 우선해야 한다.
+    question: '반려됐는데 다시 받을 수 있어?',
+    expectedRoute: 'POST_APPLICATION',
+    tags: ['post-application', 'conflict'],
+  },
 ];

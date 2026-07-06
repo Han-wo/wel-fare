@@ -1,8 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   buildPendingHitlMeta,
+  extractFactsFromAnswers,
   extractPendingHitl,
+  parseStructuredHitlAnswers,
   resolveHitlResume,
+  resolveHitlResumeFromAnswers,
   type PendingHitl,
 } from './hitl-resume';
 
@@ -71,5 +74,63 @@ describe('resolveHitlResume', () => {
     expect(
       resolveHitlResume(null, '방금 확인한 정보로 다시 찾아주세요 — 지역: 서울'),
     ).toBeNull();
+  });
+});
+
+describe('구조화 HITL 답변 (신규 계약)', () => {
+  const RAW = JSON.stringify({
+    region: { value: '11', label: '서울' },
+    age: { value: '30s', label: '30대' },
+    policy_name: 'skipped',
+  });
+
+  it('parseStructuredHitlAnswers는 유효한 맵만 통과시킨다', () => {
+    expect(parseStructuredHitlAnswers(RAW)).toEqual({
+      region: { value: '11', label: '서울' },
+      age: { value: '30s', label: '30대' },
+      policy_name: 'skipped',
+    });
+    expect(parseStructuredHitlAnswers(undefined)).toBeNull();
+    expect(parseStructuredHitlAnswers('not-json')).toBeNull();
+    expect(parseStructuredHitlAnswers('[]')).toBeNull();
+    expect(parseStructuredHitlAnswers('{}')).toBeNull();
+  });
+
+  it('구조화 답변으로 문형 파싱 없이 재개한다', () => {
+    const answers = parseStructuredHitlAnswers(RAW)!;
+    const decision = resolveHitlResumeFromAnswers(PENDING, answers);
+
+    expect(decision?.routeType).toBe('ELIGIBILITY');
+    expect(decision?.skipped).toBe(false);
+    expect(decision?.supplement).toBe('지역: 서울, 나이대: 30대');
+    expect(decision?.effectiveQuestion).toContain('[사용자 보충 정보] 지역: 서울, 나이대: 30대');
+  });
+
+  it('전부 건너뛴 답변은 원래 질문 그대로 재개한다', () => {
+    const decision = resolveHitlResumeFromAnswers(PENDING, { region: 'skipped' });
+
+    expect(decision?.skipped).toBe(true);
+    expect(decision?.effectiveQuestion).toBe(PENDING.originalQuestion);
+  });
+
+  it('pending 없이 구조화 답변만 오면 재개하지 않는다 (stale 방지)', () => {
+    const answers = parseStructuredHitlAnswers(RAW)!;
+    expect(resolveHitlResumeFromAnswers(null, answers)).toBeNull();
+  });
+
+  it('extractFactsFromAnswers는 지속 필드만 라벨 값으로 추출한다', () => {
+    const answers = parseStructuredHitlAnswers(
+      JSON.stringify({
+        region: { value: '11', label: '서울' },
+        income: { value: '80', label: '중위소득 80% 이하' },
+        policy_name: { value: '청년월세', label: '청년월세' },
+        housing: 'skipped',
+      }),
+    )!;
+
+    expect(extractFactsFromAnswers(answers)).toEqual({
+      region: '서울',
+      income: '중위소득 80% 이하',
+    });
   });
 });

@@ -49,7 +49,8 @@ export function extractPendingHitl(ragContext: unknown): PendingHitl | null {
     !candidate.originalQuestion.trim() ||
     (candidate.routeType !== 'SEARCH' &&
       candidate.routeType !== 'ELIGIBILITY' &&
-      candidate.routeType !== 'APPLICATION_ASSIST')
+      candidate.routeType !== 'APPLICATION_ASSIST' &&
+      candidate.routeType !== 'POST_APPLICATION')
   ) {
     // 구버전 메타(originalQuestion/routeType 없음)는 재개 대상이 아니다.
     return null;
@@ -65,7 +66,105 @@ export function extractPendingHitl(ragContext: unknown): PendingHitl | null {
   };
 }
 
-// 프론트 hitl-panel composeAnswerText가 만드는 고정 문형.
+/**
+ * 구조화 HITL 답변 (신규 계약).
+ *
+ * 프론트 hitl-panel이 만드는 Answers 맵을 `hitl` 쿼리 파라미터로 직접 받는다.
+ * 이 경로가 있으면 아래 문형 역파싱(resolveHitlResume)은 타지 않는다 —
+ * 문형 매칭은 구클라이언트 호환용 폴백으로만 남는다.
+ */
+export type StructuredHitlAnswer = { value: string; label: string } | 'skipped';
+export type StructuredHitlAnswers = Record<string, StructuredHitlAnswer>;
+
+// hitl-panel labelForField와 동일한 라벨. 병합 질문 문구를 기존 문형과 맞춘다.
+const FIELD_LABELS: Record<string, string> = {
+  policy_name: '정책명',
+  region: '지역',
+  age: '나이대',
+  income: '소득',
+  housing: '주거',
+  category: '분야',
+};
+
+// 세션을 넘어 지속 저장할 프로필 사실 필드 (정책명/분야는 질문 단위 문맥).
+const FACT_FIELD_KEYS = ['region', 'age', 'income', 'housing'] as const;
+
+export function parseStructuredHitlAnswers(raw: string | undefined | null): StructuredHitlAnswers | null {
+  if (!raw?.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+
+    const answers: StructuredHitlAnswers = {};
+    for (const [fieldKey, answer] of Object.entries(parsed as Record<string, unknown>)) {
+      if (answer === 'skipped') {
+        answers[fieldKey] = 'skipped';
+        continue;
+      }
+      if (
+        answer &&
+        typeof answer === 'object' &&
+        typeof (answer as { label?: unknown }).label === 'string'
+      ) {
+        answers[fieldKey] = {
+          value: String((answer as { value?: unknown }).value ?? ''),
+          label: (answer as { label: string }).label,
+        };
+      }
+    }
+    return Object.keys(answers).length > 0 ? answers : null;
+  } catch {
+    return null;
+  }
+}
+
+// 구조화 답변 → 재개 결정. 문형 파싱 없이 결정적으로 동작한다.
+export function resolveHitlResumeFromAnswers(
+  pending: PendingHitl | null,
+  answers: StructuredHitlAnswers,
+): HitlResumeDecision | null {
+  if (!pending) return null;
+
+  const answered = Object.entries(answers).filter(
+    (entry): entry is [string, { value: string; label: string }] => entry[1] !== 'skipped',
+  );
+
+  if (answered.length === 0) {
+    return {
+      routeType: pending.routeType,
+      effectiveQuestion: pending.originalQuestion,
+      supplement: '',
+      skipped: true,
+    };
+  }
+
+  const supplement = answered
+    .map(([fieldKey, answer]) => `${FIELD_LABELS[fieldKey] ?? fieldKey}: ${answer.label}`)
+    .join(', ');
+
+  return {
+    routeType: pending.routeType,
+    effectiveQuestion: mergeQuestion(pending.originalQuestion, supplement),
+    supplement,
+    skipped: false,
+  };
+}
+
+// 구조화 답변에서 지속 프로필 사실을 직접 추출한다 (문자열 파싱 불필요).
+export function extractFactsFromAnswers(
+  answers: StructuredHitlAnswers,
+): Record<string, string> {
+  const facts: Record<string, string> = {};
+  for (const fieldKey of FACT_FIELD_KEYS) {
+    const answer = answers[fieldKey];
+    if (answer && answer !== 'skipped' && answer.label.trim()) {
+      facts[fieldKey] = answer.label.trim();
+    }
+  }
+  return facts;
+}
+
+// 프론트 hitl-panel composeAnswerText가 만드는 고정 문형 (구클라이언트 폴백).
 const PANEL_ANSWER_RE = /^방금 확인한 정보로 다시 찾아주세요\s*[—-]?\s*(.*)$/s;
 const PANEL_SKIP_RE = /^방금 답변은 건너뛸게요/;
 

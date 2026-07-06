@@ -14,8 +14,9 @@ export class RagService {
     userId: string,
     sessionId: string,
     question: string,
+    hitlAnswers?: string,
   ): AsyncGenerator<RagStreamEvent> {
-    return this.orchestrator.streamAnswer(userId, sessionId, question);
+    return this.orchestrator.streamAnswer(userId, sessionId, question, hitlAnswers);
   }
 
   getSuggestions(userId: string) {

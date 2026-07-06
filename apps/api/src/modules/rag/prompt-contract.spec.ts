@@ -3,6 +3,7 @@ import {
   APPLICATION_ASSIST_SYSTEM_PROMPT,
   BUDGET_EXHAUSTED_INSTRUCTION,
   ELIGIBILITY_SYSTEM_PROMPT,
+  POST_APPLICATION_SYSTEM_PROMPT,
   ROUTER_FALLBACK_SYSTEM_PROMPT,
   SEARCH_SYSTEM_PROMPT,
 } from './prompts';
@@ -49,12 +50,20 @@ describe('prompt contracts', () => {
     expect(APPLICATION_ASSIST_SYSTEM_PROMPT).toContain('공고문 확인 필요');
   });
 
-  it('라우터 폴백 프롬프트는 세 라우트를 전부 정의한다', () => {
+  it('라우터 폴백 프롬프트는 네 라우트를 전부 정의한다', () => {
     expect(ROUTER_FALLBACK_SYSTEM_PROMPT).toContain('SEARCH');
     expect(ROUTER_FALLBACK_SYSTEM_PROMPT).toContain('ELIGIBILITY');
     expect(ROUTER_FALLBACK_SYSTEM_PROMPT).toContain('APPLICATION_ASSIST');
+    expect(ROUTER_FALLBACK_SYSTEM_PROMPT).toContain('POST_APPLICATION');
     // 애매할 때의 기본값 지시는 폴백 안전성의 핵심 계약이다.
     expect(ROUTER_FALLBACK_SYSTEM_PROMPT).toContain('애매하면 SEARCH');
+  });
+
+  it('POST_APPLICATION 프롬프트는 사후관리 구조 마커를 정의한다', () => {
+    expect(POST_APPLICATION_SYSTEM_PROMPT).toContain('확인 방법');
+    expect(POST_APPLICATION_SYSTEM_PROMPT).toContain('대응 단계');
+    expect(POST_APPLICATION_SYSTEM_PROMPT).toContain('이의신청');
+    expect(POST_APPLICATION_SYSTEM_PROMPT).toContain('바로 할 일');
   });
 
   it('시스템 프롬프트는 동적 값 없이 정적이다 (prompt caching 계약)', () => {

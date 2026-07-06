@@ -447,8 +447,8 @@ export default function ChatSessionPage() {
                 <HitlPanel
                   questionnaire={activeHitl}
                   onDismiss={dismissHitl}
-                  onSubmit={(composed) => {
-                    submitHitlResponse(composed);
+                  onSubmit={(composed, answers) => {
+                    submitHitlResponse(composed, answers);
                   }}
                 />
               </div>

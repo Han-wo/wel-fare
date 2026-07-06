@@ -79,26 +79,15 @@ type StreamPayload =
   | { eventType: 'HITL'; payload: HitlQuestionnaire }
   | { eventType: 'DONE' };
 
-type StructuredTokenContent =
-  | { type: 'think'; phase?: string; content?: string; node?: string }
-  | { type: 'info'; trace_id?: string; session_id?: string }
-  | { type: 'text'; content?: string };
+// HITL 패널의 구조화 답변. fieldKey → 선택/입력값. 백엔드 `hitl` 쿼리 파라미터
+// 계약(StructuredHitlAnswers)과 동일한 모양이다.
+export type HitlAnswers = Record<string, { value: string; label: string } | 'skipped'>;
 
 function parseStreamPayload(raw: string): StreamPayload | null {
   if (!raw) return null;
 
   try {
     return JSON.parse(raw) as StreamPayload;
-  } catch {
-    return null;
-  }
-}
-
-function parseStructuredTokenContent(raw: string): StructuredTokenContent | null {
-  if (!raw || raw[0] !== '{') return null;
-
-  try {
-    return JSON.parse(raw) as StructuredTokenContent;
   } catch {
     return null;
   }
@@ -147,10 +136,12 @@ export function useChat(sessionId: string) {
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string | null>(null);
   const optimisticMessagesRef = useRef<ChatMessage[]>([]);
-  const pendingOutboundMessageRef = useRef<string | null>(null);
+  const pendingOutboundMessageRef = useRef<{ text: string; hitl?: string } | null>(null);
   const isStreamingRef = useRef(false);
   const isLoadingRef = useRef(true);
-  const sendMessageRef = useRef<(question: string) => Promise<void> | void>(() => undefined);
+  const sendMessageRef = useRef<(question: string, hitlJson?: string) => Promise<void> | void>(
+    () => undefined,
+  );
   const skipNextHitlSyncRef = useRef(true);
 
   const resetStreamState = useCallback(() => {
@@ -289,12 +280,12 @@ export function useChat(sessionId: string) {
   }, [activeHitl, sessionId]);
 
   const flushPendingOutboundMessage = useCallback(() => {
-    const pending = pendingOutboundMessageRef.current?.trim();
-    if (!pending) return;
+    const pending = pendingOutboundMessageRef.current;
+    if (!pending?.text.trim()) return;
 
     pendingOutboundMessageRef.current = null;
     queueMicrotask(() => {
-      void sendMessageRef.current(pending);
+      void sendMessageRef.current(pending.text.trim(), pending.hitl);
     });
   }, []);
 
@@ -317,12 +308,12 @@ export function useChat(sessionId: string) {
   }, [closeStream, sessionId]);
 
   const sendMessage = useCallback(
-    async (question: string) => {
+    async (question: string, hitlJson?: string) => {
       const trimmed = question.trim();
       if (!trimmed || isLoadingRef.current) return;
 
       if (isStreamingRef.current) {
-        pendingOutboundMessageRef.current = trimmed;
+        pendingOutboundMessageRef.current = { text: trimmed, hitl: hitlJson };
         return;
       }
 
@@ -359,8 +350,9 @@ export function useChat(sessionId: string) {
       abortRef.current = controller;
 
       try {
+        const hitlParam = hitlJson ? `&hitl=${encodeURIComponent(hitlJson)}` : '';
         const response = await fetchWithAuth(
-          `${API_BASE}/api/v1/rag/stream?sessionId=${encodeURIComponent(sessionId)}&q=${encodeURIComponent(trimmed)}`,
+          `${API_BASE}/api/v1/rag/stream?sessionId=${encodeURIComponent(sessionId)}&q=${encodeURIComponent(trimmed)}${hitlParam}`,
           {
             method: 'GET',
             signal: controller.signal,
@@ -444,18 +436,22 @@ export function useChat(sessionId: string) {
     setActiveHitl(null);
   }, []);
 
-  const submitHitlResponse = useCallback((question: string) => {
+  const submitHitlResponse = useCallback((question: string, answers?: HitlAnswers) => {
     const trimmed = question.trim();
     if (!trimmed) return;
+
+    // 구조화 답변을 함께 실어 백엔드가 문형 역파싱 없이 결정적으로 재개하게 한다.
+    const hitlJson =
+      answers && Object.keys(answers).length > 0 ? JSON.stringify(answers) : undefined;
 
     setActiveHitl(null);
 
     if (isStreamingRef.current) {
-      pendingOutboundMessageRef.current = trimmed;
+      pendingOutboundMessageRef.current = { text: trimmed, hitl: hitlJson };
       return;
     }
 
-    void sendMessageRef.current(trimmed);
+    void sendMessageRef.current(trimmed, hitlJson);
   }, []);
 
   return {
@@ -513,25 +509,8 @@ function handleStreamEvent(
   }
 
   if (payload.eventType === 'TOKEN') {
-    const structured = parseStructuredTokenContent(payload.content);
-    if (structured?.type === 'think') {
-      callbacks.think({
-        phase: structured.phase,
-        content: structured.content,
-        node: structured.node,
-      });
-      return;
-    }
-
-    if (structured?.type === 'info') {
-      return;
-    }
-
-    if (structured?.type === 'text' && structured.content) {
-      callbacks.token(structured.content);
-      return;
-    }
-
+    // TOKEN은 순수 답변 텍스트만 싣는다. 생각 과정은 THINK_DETAIL 전용 채널
+    // (JSON-in-TOKEN 레거시 분기는 백엔드 emitter가 없어 제거됨).
     callbacks.token(payload.content);
     return;
   }

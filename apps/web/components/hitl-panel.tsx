@@ -8,6 +8,7 @@ import type {
   HitlQuestionnaire,
 } from '../hooks/useChat';
 
+// useChat.HitlAnswers와 동일한 모양 — 제출 시 구조화된 형태 그대로 백엔드에 전달된다.
 type Answers = Record<string, { value: string; label: string } | 'skipped'>;
 
 export function HitlPanel({

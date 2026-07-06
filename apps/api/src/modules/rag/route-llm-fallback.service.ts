@@ -6,7 +6,7 @@ import type { RouteFallbackClassifier, RouteFallbackResult } from './route-fallb
 import { ROUTER_FALLBACK_SYSTEM_PROMPT } from './prompts';
 
 const ROUTE_SCHEMA = z.object({
-  route: z.enum(['SEARCH', 'ELIGIBILITY', 'APPLICATION_ASSIST']),
+  route: z.enum(['SEARCH', 'ELIGIBILITY', 'APPLICATION_ASSIST', 'POST_APPLICATION']),
   reason: z.string().describe('선택 근거 한 문장 (한국어)'),
 });
 

@@ -61,8 +61,9 @@ export class RagController {
     @Request() req: { user: { id: string } },
     @Query('sessionId') sessionId: string,
     @Query('q') question: string,
+    @Query('hitl') hitlAnswers?: string,
   ): Observable<MessageEvent> {
-    const generator = this.ragService.streamAnswer(req.user.id, sessionId, question);
+    const generator = this.ragService.streamAnswer(req.user.id, sessionId, question, hitlAnswers);
     return new Observable((subscriber) => {
       (async () => {
         for await (const event of generator) {

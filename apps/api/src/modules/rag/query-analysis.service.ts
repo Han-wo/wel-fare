@@ -7,7 +7,7 @@ import {
 } from './route-fallback';
 import { getHitlFacts } from './profile-facts';
 
-export type RagRouteType = 'SEARCH' | 'ELIGIBILITY' | 'APPLICATION_ASSIST';
+export type RagRouteType = 'SEARCH' | 'ELIGIBILITY' | 'APPLICATION_ASSIST' | 'POST_APPLICATION';
 
 export type RagRouteDecision = {
   routeType: RagRouteType;
@@ -42,6 +42,12 @@ export type ApplicationSource =
   | 'welfare_facility'
   | 'welfare'
   | 'policy_lookup';
+
+// 신청 이후 단계 신호. "신청했는데/접수했는데" 같은 완료형 표지나 반려·심사·
+// 이의신청 어휘가 있으면 자격/신청 의도보다 우선한다 (예: "반려됐는데 다시
+// 받을 수 있어?"는 ELIGIBILITY가 아니라 사후관리).
+const POST_APPLICATION_INTENT =
+  /반려|탈락(했|됐|이)|떨어졌|불합격|(신청|접수)\s*했(는데|어요|습니다|더니|고)|심사\s*(기간|결과|중|얼마나|언제)|(선정|심사|당첨)\s*결과|결과\s*(언제|발표|확인|나왔|안\s*나)|이의\s*신청|재신청/;
 
 const ELIGIBILITY_INTENT =
   /받을 수 있|받을수있|자격(이|은|을)?|조건(이|은|을)?\s*(뭐|무엇|어떻|되는|맞|해당)|대상인지|해당되|가능한지|eligible/i;
@@ -134,6 +140,13 @@ export class QueryAnalysisService {
   }
 
   resolveRoute(question: string): RagRouteDecision {
+    if (POST_APPLICATION_INTENT.test(question)) {
+      return {
+        routeType: 'POST_APPLICATION',
+        detail: '질문에 신청 이후 단계(반려·심사·결과·이의신청) 의도가 있어 사후관리 workflow로 라우팅했습니다.',
+      };
+    }
+
     if (ELIGIBILITY_INTENT.test(question)) {
       return {
         routeType: 'ELIGIBILITY',

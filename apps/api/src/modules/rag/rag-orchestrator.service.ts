@@ -3,9 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { traceable } from 'langsmith/traceable';
-import { createRagGraph, type RagGraphServices } from './rag.graph';
-import { createEligibilityGraph } from './eligibility.graph';
-import { createApplicationAssistGraph } from './application-assist.graph';
+import { type RagGraphServices } from './rag.graph';
+import {
+  buildRagGraphs,
+  DEFAULT_ROUTE,
+  type InvokableRagGraph,
+} from './graph-registry';
 import { RetrieverServices } from './retriever-services.service';
 import {
   QueryAnalysisService,
@@ -13,7 +16,13 @@ import {
   type RagRouteType,
 } from './query-analysis.service';
 import type { RouteTier } from './route-fallback';
-import { extractPendingHitl, resolveHitlResume } from './hitl-resume';
+import {
+  extractFactsFromAnswers,
+  extractPendingHitl,
+  parseStructuredHitlAnswers,
+  resolveHitlResume,
+  resolveHitlResumeFromAnswers,
+} from './hitl-resume';
 import { parseSupplementFacts } from './profile-facts';
 import { ProfileFactsService } from '../profile/profile-facts.service';
 import { TraceFacade } from './trace-facade.service';
@@ -30,9 +39,7 @@ import type { HitlQuestionnaire } from './hitl.types';
 @Injectable()
 export class RagOrchestratorService {
   private readonly logger = new Logger(RagOrchestratorService.name);
-  private readonly searchGraph: ReturnType<typeof createRagGraph>;
-  private readonly eligibilityGraph: ReturnType<typeof createEligibilityGraph>;
-  private readonly applicationAssistGraph: ReturnType<typeof createApplicationAssistGraph>;
+  private readonly graphs: Map<RagRouteType, InvokableRagGraph>;
 
   constructor(
     @InjectRepository(ChatMessage)
@@ -107,15 +114,14 @@ export class RagOrchestratorService {
       getSidoName,
     };
 
-    this.searchGraph = createRagGraph(services);
-    this.eligibilityGraph = createEligibilityGraph(services);
-    this.applicationAssistGraph = createApplicationAssistGraph(services);
+    this.graphs = buildRagGraphs(services);
   }
 
   async *streamAnswer(
     userId: string,
     sessionId: string,
     question: string,
+    hitlAnswersRaw?: string,
   ): AsyncGenerator<RagStreamEvent> {
     await this.ensureSessionOwnership(userId, sessionId);
 
@@ -127,8 +133,13 @@ export class RagOrchestratorService {
     });
     // 직전 턴이 HITL 클래리피케이션으로 끝났고 이번 메시지가 그 보충 답변이면,
     // 재라우팅하지 않고 원래 질문·라우트를 복원해 이어서 실행한다.
+    // 구조화 답변(hitl 파라미터)이 있으면 결정적으로 처리하고, 없으면
+    // 합성 문형 역파싱(구클라이언트 폴백)을 탄다.
     const pendingHitl = await this.loadPendingHitl(sessionId);
-    const resume = resolveHitlResume(pendingHitl, question);
+    const structuredAnswers = parseStructuredHitlAnswers(hitlAnswersRaw);
+    const resume = structuredAnswers
+      ? resolveHitlResumeFromAnswers(pendingHitl, structuredAnswers)
+      : resolveHitlResume(pendingHitl, question);
 
     let routeDecision: RagRouteDecision & { tier: RouteTier };
     let effectiveQuestion = question;
@@ -156,9 +167,12 @@ export class RagOrchestratorService {
       });
 
       // 보충 답변의 나이대/지역/소득/주거는 세션을 넘어 재사용하도록 승격한다.
+      // 구조화 답변이면 맵에서 직접, 아니면 문자열 파싱으로 추출한다.
       // 저장 실패는 이번 턴 답변에 영향을 주지 않는다(다음 세션에 재질문될 뿐).
       if (resume.supplement) {
-        const facts = parseSupplementFacts(resume.supplement);
+        const facts = structuredAnswers
+          ? extractFactsFromAnswers(structuredAnswers)
+          : parseSupplementFacts(resume.supplement);
         if (Object.keys(facts).length > 0) {
           try {
             await this.profileFacts.upsertMany(userId, facts, { source: 'hitl', sessionId });
@@ -279,16 +293,8 @@ export class RagOrchestratorService {
     });
   }
 
-  private getGraphForRoute(routeType: RagRouteType) {
-    switch (routeType) {
-      case 'ELIGIBILITY':
-        return this.eligibilityGraph;
-      case 'APPLICATION_ASSIST':
-        return this.applicationAssistGraph;
-      case 'SEARCH':
-      default:
-        return this.searchGraph;
-    }
+  private getGraphForRoute(routeType: RagRouteType): InvokableRagGraph {
+    return this.graphs.get(routeType) ?? this.graphs.get(DEFAULT_ROUTE)!;
   }
 
   // 직전 assistant 메시지가 HITL 클래리피케이션이면 그 pending 컨텍스트를 돌려준다.
