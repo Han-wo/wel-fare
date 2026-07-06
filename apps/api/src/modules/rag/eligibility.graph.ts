@@ -254,6 +254,9 @@ export function createEligibilityGraph(services: RagGraphServices) {
       state.traceId,
     );
     const profileSummary = result.profileSummary ?? formatProfile(state.profile);
+    // retriever의 profileSummary에는 대화 유래 사실(hitlFacts)이 없다.
+    // 판정 근거에서 "미입력"으로 오판하지 않도록 여기서 덧붙인다.
+    const factsLine = formatHitlFactsLine(state.profile);
     const docsText = retrievalResultToPromptBlock(result, {
       heading: '정책 후보 문서',
       emptyLabel: '관련 정책을 찾지 못했습니다.',
@@ -262,6 +265,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
     const contextText = [
       '## 사용자 프로필',
       profileSummary,
+      ...(factsLine && !profileSummary.includes(factsLine) ? [factsLine] : []),
       '',
       docsText,
       '',

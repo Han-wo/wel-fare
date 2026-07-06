@@ -13,7 +13,7 @@ export class Policy {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true, nullable: true })
+  @Column({ type: 'varchar', unique: true, nullable: true })
   externalId?: string | null;
 
   @Column()
@@ -25,10 +25,10 @@ export class Policy {
   @Column()
   category: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   subcategory?: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   provider?: string | null;
 
   @Column({ type: 'text', nullable: true })
@@ -43,7 +43,7 @@ export class Policy {
   @Column({ type: 'bigint', nullable: true })
   benefitAmount?: number | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   benefitType?: string | null;
 
   @Column({ type: 'date', nullable: true })
@@ -55,10 +55,10 @@ export class Policy {
   @Column({ default: 'ACTIVE' })
   status: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   applyUrl?: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   contact?: string | null;
 
   @Column({ type: 'text', array: true, nullable: true })
@@ -70,10 +70,10 @@ export class Policy {
   @Column({ type: 'jsonb', nullable: true })
   rawData?: Record<string, unknown> | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   qdrantPointId?: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   neo4jNodeId?: string | null;
 
   @Column({ default: 0 })
@@ -91,6 +91,6 @@ export class Policy {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @Column({ nullable: true })
+  @Column({ type: 'timestamp', nullable: true })
   syncedAt?: Date | null;
 }

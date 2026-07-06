@@ -23,7 +23,7 @@ export class PolicyRequirement {
   @Column()
   reqType: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   operator?: string | null;
 
   @Column({ type: 'numeric', nullable: true })
