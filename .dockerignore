@@ -41,3 +41,6 @@ Thumbs.db
 docs/
 *.md
 !README.md
+
+# TypeScript incremental state (로컬 캐시가 이미지에 새면 빌드 오판)
+**/*.tsbuildinfo

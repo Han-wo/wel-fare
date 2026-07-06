@@ -499,7 +499,9 @@ export class DataSyncService {
 
     const actualMap = new Map(actualRows.map((row) => [row.seedKey, row]));
     const statusMap = new Map(sourceStatuses.map((row) => [row.seedKey, row]));
-    const successMap = new Map(
+    // 제네릭 명시: successRows가 raw query(any)라 콜백 반환 주석만으로는
+    // 컨테이너의 .d.ts 기반 해석에서 튜플 추론이 무너진다(Docker 빌드 실패 이력).
+    const successMap = new Map<string, Date | null>(
       successRows.map((row: Record<string, unknown>): [string, Date | null] => [
         String(row.seedKey),
         this.parseDateValue(row.finishedAt),

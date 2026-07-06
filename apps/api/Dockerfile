@@ -39,7 +39,8 @@ RUN for pkg in shared-types shared-utils ontology-schema; do \
 RUN pnpm --filter @welfare-ai/api exec nest build
 
 # Create an isolated production deployment (resolves all prod deps)
-RUN pnpm --filter @welfare-ai/api deploy --prod /prod/api
+# --legacy: pnpm v10부터 inject-workspace-packages 없이는 deploy가 거부됨
+RUN pnpm --filter @welfare-ai/api deploy --legacy --prod /prod/api
 
 # Copy the compiled dist into the deployment directory
 RUN cp -r apps/api/dist /prod/api/dist
