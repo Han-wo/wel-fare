@@ -10,6 +10,7 @@ import {
   type RagTraceNode,
   type RagTraceStatus,
 } from './entities/rag-trace.entity';
+import { aggregateQualityMetrics, type QualityTraceRow } from './quality-metrics';
 
 type RagTraceDraft = {
   id: string;
@@ -400,6 +401,35 @@ export class RagTraceService {
 
     const [items, total] = await qb.getManyAndCount();
     return { items, total, limit, offset };
+  }
+
+  // 품질 지표 집계(quality-metrics.ts 공용): 라우팅 tier 분포·형식 준수·
+  // HITL 재질문/재개율·안전장치 발동. CLI rag:quality와 같은 지표.
+  async getQualitySummary(params: { from?: string; to?: string }) {
+    const conditions: string[] = [];
+    const args: unknown[] = [];
+    if (params.from) {
+      args.push(params.from);
+      conditions.push(`started_at >= $${args.length}`);
+    }
+    if (params.to) {
+      args.push(params.to);
+      conditions.push(`started_at <= $${args.length}`);
+    }
+    const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const rows: Array<{
+      status: string;
+      route_type: string | null;
+      events: QualityTraceRow['events'];
+    }> = await this.traceRepo.query(
+      `SELECT status, route_type, events FROM rag_traces ${whereSql}`,
+      args,
+    );
+
+    return aggregateQualityMetrics(
+      rows.map((row) => ({ status: row.status, routeType: row.route_type, events: row.events })),
+    );
   }
 
   // 대시보드 집계(LangSmith monitoring 대응): 상태 분포·에러율·지연 분위수·

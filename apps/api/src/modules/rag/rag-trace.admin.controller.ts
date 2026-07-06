@@ -29,6 +29,12 @@ export class RagTraceAdminController {
     return this.ragTraceService.getStats({ from, to });
   }
 
+  @Get('quality-summary')
+  @ApiOperation({ summary: 'RAG 품질 지표 (라우팅 tier·형식 준수·HITL·안전장치)' })
+  getQualitySummary(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.ragTraceService.getQualitySummary({ from, to });
+  }
+
   @Get('search')
   @ApiOperation({ summary: 'RAG run 히스토리 조회 (필터·페이지네이션)' })
   search(

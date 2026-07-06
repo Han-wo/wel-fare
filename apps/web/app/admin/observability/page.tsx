@@ -58,6 +58,26 @@ interface Stats {
   hallucinationWarnings: number;
 }
 
+// GET /admin/traces/quality-summary (quality-metrics.ts와 동일 모양)
+interface QualitySummary {
+  total: number;
+  tierCounts: Record<string, number>;
+  format: { warnedTraces: number; byRoute: Record<string, number> };
+  hitl: { profileAsked: number; recovery: number; resumed: number; resumedSuccess: number };
+  safeguards: {
+    budgetExhausted: number;
+    retrySearch: number;
+    retrySearchRecovered: number;
+    groundingWarned: number;
+    corrections: number;
+  };
+}
+
+function ratio(part: number, whole: number): string {
+  if (!whole) return '0.0%';
+  return `${((part / whole) * 100).toFixed(1)}%`;
+}
+
 const PAGE_SIZE = 25;
 
 const EVENT_COLORS: Record<string, string> = {
@@ -114,6 +134,7 @@ export default function ObservabilityPage() {
   const accessToken = useUserStore((s) => s.accessToken);
 
   const [stats, setStats] = useState<Stats | null>(null);
+  const [quality, setQuality] = useState<QualitySummary | null>(null);
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -135,8 +156,12 @@ export default function ObservabilityPage() {
   }, [hasHydrated, accessToken, userRole, router]);
 
   const fetchStats = useCallback(async () => {
-    const data = await api<Stats>('/admin/traces/stats');
-    setStats(data);
+    const [statsData, qualityData] = await Promise.all([
+      api<Stats>('/admin/traces/stats'),
+      api<QualitySummary>('/admin/traces/quality-summary').catch(() => null),
+    ]);
+    setStats(statsData);
+    setQuality(qualityData);
   }, []);
 
   const fetchRuns = useCallback(async () => {
@@ -234,6 +259,51 @@ export default function ObservabilityPage() {
               label="환각 경고"
               value={stats ? String(stats.hallucinationWarnings) : '—'}
               danger={!!stats && stats.hallucinationWarnings > 0}
+            />
+          </div>
+
+          {/* 품질 지표 카드 (rag:quality와 동일 지표) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              gap: 12,
+              marginBottom: 20,
+            }}
+          >
+            <Stat
+              label="LLM 폴백 라우팅"
+              value={quality ? ratio(quality.tierCounts.llm_fallback ?? 0, quality.total) : '—'}
+              sub={quality ? `regex ${quality.tierCounts.regex ?? 0} · 재개 ${quality.tierCounts.hitl_resume ?? 0}` : undefined}
+            />
+            <Stat
+              label="형식 경고"
+              value={quality ? String(quality.format.warnedTraces) : '—'}
+              danger={!!quality && quality.format.warnedTraces > 0}
+              sub={quality ? ratio(quality.format.warnedTraces, quality.total) : undefined}
+            />
+            <Stat
+              label="프로필 재질문율"
+              value={quality ? ratio(quality.hitl.profileAsked, quality.total) : '—'}
+              sub={quality ? `복구형 HITL ${ratio(quality.hitl.recovery, quality.total)}` : undefined}
+            />
+            <Stat
+              label="HITL 재개 성공"
+              value={
+                quality
+                  ? `${quality.hitl.resumedSuccess}/${quality.hitl.resumed}`
+                  : '—'
+              }
+            />
+            <Stat
+              label="검색 재시도"
+              value={quality ? String(quality.safeguards.retrySearch) : '—'}
+              sub={quality ? `HITL 회피 ${quality.safeguards.retrySearchRecovered}` : undefined}
+            />
+            <Stat
+              label="정정 부록"
+              value={quality ? String(quality.safeguards.corrections) : '—'}
+              sub={quality ? `예산 소진 ${quality.safeguards.budgetExhausted}` : undefined}
             />
           </div>
 
