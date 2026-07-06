@@ -1,0 +1,10 @@
+# API 리버스 프록시 + 자동 HTTPS (Let's Encrypt)
+# DOMAIN 환경변수는 docker-compose.prod.yml의 caddy 서비스가 주입한다.
+# 같은 도커 네트워크(welfare_net)라 컨테이너 이름으로 접근한다.
+# SSE 스트리밍을 위해 flush_interval -1 (버퍼링 없이 즉시 전달).
+
+{$DOMAIN} {
+	reverse_proxy api:3001 {
+		flush_interval -1
+	}
+}

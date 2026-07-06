@@ -127,8 +127,15 @@ services:
       PUBLIC_DATA_API_KEY: ${PUBLIC_DATA_API_KEY:-}
       BOKJIRO_API_KEY: ${BOKJIRO_API_KEY:-}
       YOUTH_CENTER_API_KEY: ${YOUTH_CENTER_API_KEY:-}
+      SEOUL_OPEN_API_KEY: ${SEOUL_OPEN_API_KEY:-}
+      GYEONGGI_API_KEY: ${GYEONGGI_API_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      OPENAI_ROUTER_MODEL: ${OPENAI_ROUTER_MODEL:-gpt-5-nano}
+      RAG_ROUTE_LLM_FALLBACK: ${RAG_ROUTE_LLM_FALLBACK:-on}
     ports:
-      - "3001:3001"
+      # Caddy가 TLS 종단으로 앞단에 서므로 호스트 루프백에만 바인딩
+      - "127.0.0.1:3001:3001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,12 +177,34 @@ services:
       api:
         condition: service_healthy
 
+  # ── Reverse proxy (TLS 종단) ────────────────────────────────────────────────
+  # Vercel(https) 프론트가 API를 호출하려면 API도 https여야 한다(mixed content).
+  # DOMAIN에 대해 Let's Encrypt 인증서를 자동 발급·갱신한다.
+  caddy:
+    <<: *common
+    image: caddy:2-alpine
+    container_name: welfare_caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   neo4j_data:
   neo4j_logs:
   qdrant_data:
   redis_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   welfare_net:
