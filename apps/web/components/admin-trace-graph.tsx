@@ -324,7 +324,7 @@ function TraceGraphCanvas({
           ) : null}
         </div>
 
-        <div className="relative h-[640px] bg-[radial-gradient(circle_at_top_left,rgba(47,111,91,0.08),transparent_24%),linear-gradient(180deg,rgba(255,255,252,0.9),rgba(247,242,234,0.94))]">
+        <div className="relative h-[640px] bg-[var(--bg-subtle)]">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] grid grid-cols-6 gap-3 px-6 py-4">
             {PHASES.map((phase) => {
               const activePhase = selectedNode

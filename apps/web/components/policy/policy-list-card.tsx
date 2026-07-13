@@ -48,6 +48,12 @@ export function PolicyListCard({
           onClick();
         }
       }}
+      onMouseEnter={(e) => {
+        if (onClick) e.currentTarget.style.borderColor = 'var(--border-strong)';
+      }}
+      onMouseLeave={(e) => {
+        if (onClick) e.currentTarget.style.borderColor = 'var(--border)';
+      }}
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border)',

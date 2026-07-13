@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import neo4j from 'neo4j-driver';
+import { MemorySaver } from '@langchain/langgraph';
+import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { RagController } from './rag.controller';
 import { RagTraceAdminController } from './rag-trace.admin.controller';
 import { RagService } from './rag.service';
@@ -16,7 +18,8 @@ import { PolicyGraphService } from './policy-graph.service';
 import { HousingGraphService } from './housing-graph.service';
 import { SuggestionService } from './suggestion.service';
 import { HitlSuggestionService } from './hitl-suggestion.service';
-import { NEO4J_DRIVER } from './rag.tokens';
+import { NEO4J_DRIVER, RAG_CHECKPOINTER } from './rag.tokens';
+import { RagAnswerStreamService } from './rag-answer-stream.service';
 import { RagThinkingStreamService } from './rag-thinking-stream.service';
 import { UserProfile } from '../profile/entities/user-profile.entity';
 import { Policy } from '../policies/entities/policy.entity';
@@ -29,6 +32,7 @@ import { DataSyncLog } from '../data-sync/entities/data-sync-log.entity';
 import { RagCacheService } from './rag-cache.service';
 import { ROUTE_FALLBACK_CLASSIFIER } from './route-fallback';
 import { RouteLlmFallbackService } from './route-llm-fallback.service';
+import { QuestionCondenserService } from './question-condenser.service';
 
 @Module({
   imports: [
@@ -52,6 +56,21 @@ import { RouteLlmFallbackService } from './route-llm-fallback.service';
         ),
     },
     {
+      // HITL interrupt 중단-재개용 체크포인터. 클래리피케이션 질문을 던진 그래프가
+      // 멈춘 지점부터 다음 HTTP 요청(프로세스 재시작 이후 포함)에서 이어지도록
+      // Postgres에 체크포인트를 저장한다. DATABASE_URL이 없는 환경(단위 테스트 등)은
+      // 인메모리로 동작한다.
+      provide: RAG_CHECKPOINTER,
+      inject: [ConfigService],
+      useFactory: async (config: ConfigService) => {
+        const url = config.get<string>('DATABASE_URL');
+        if (!url) return new MemorySaver();
+        const saver = PostgresSaver.fromConnString(url);
+        await saver.setup();
+        return saver;
+      },
+    },
+    {
       // 라우팅 LLM 폴백. off이거나 OpenAI 키가 없으면 null → 정규식 단독 동작.
       provide: ROUTE_FALLBACK_CLASSIFIER,
       inject: [ConfigService],
@@ -68,12 +87,14 @@ import { RouteLlmFallbackService } from './route-llm-fallback.service';
     QueryAnalysisService,
     StreamingService,
     RagThinkingStreamService,
+    RagAnswerStreamService,
     RagCacheService,
     VectorRetrievalService,
     PolicyGraphService,
     HousingGraphService,
     SuggestionService,
     HitlSuggestionService,
+    QuestionCondenserService,
   ],
 })
 export class RagModule {}

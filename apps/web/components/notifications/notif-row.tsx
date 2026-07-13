@@ -8,8 +8,8 @@ export type NotifType = 'deadline' | 'match' | 'info' | 'update' | 'system';
 const ICON_MAP: Record<NotifType, { icon: ReactNode; color: string; bg: string }> = {
   deadline: {
     icon: <Clock size={14} />,
-    color: '#8a5d10',
-    bg: '#f9f0d9',
+    color: 'var(--warning-text)',
+    bg: 'var(--warning-soft)',
   },
   match: {
     icon: <Sparkles size={14} />,
@@ -57,15 +57,22 @@ export function NotifRow({ type, title, detail, time, unread, onClick }: NotifRo
           onClick();
         }
       }}
+      onMouseEnter={(e) => {
+        if (onClick) e.currentTarget.style.borderColor = 'var(--border-strong)';
+      }}
+      onMouseLeave={(e) => {
+        if (onClick) e.currentTarget.style.borderColor = 'var(--border)';
+      }}
       style={{
         display: 'flex',
         gap: 14,
         padding: '14px 16px',
         background: unread ? 'var(--bg-surface)' : 'transparent',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
         position: 'relative',
         cursor: onClick ? 'pointer' : 'default',
+        transition: 'border-color 0.15s ease',
       }}
     >
       {unread && (

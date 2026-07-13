@@ -107,7 +107,7 @@ function statusMap(status: RagStatus): PipelineStatus {
 }
 
 function formatDuration(value?: number | null) {
-  if (value == null) return '—';
+  if (value == null) return '-';
   if (value < 1000) return `${value}ms`;
   if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
   return `${Math.floor(value / 60_000)}m ${Math.floor((value / 1000) % 60)}s`;
@@ -246,10 +246,10 @@ export default function ObservabilityPage() {
               marginBottom: 20,
             }}
           >
-            <Stat label="전체 run" value={stats ? String(stats.total) : '—'} />
+            <Stat label="전체 run" value={stats ? String(stats.total) : '-'} />
             <Stat
               label="에러율"
-              value={stats ? `${(stats.errorRate * 100).toFixed(1)}%` : '—'}
+              value={stats ? `${(stats.errorRate * 100).toFixed(1)}%` : '-'}
               danger={!!stats && stats.errorRate > 0}
               sub={stats ? `실패 ${stats.byStatus.failed + stats.byStatus.aborted}` : undefined}
             />
@@ -257,7 +257,7 @@ export default function ObservabilityPage() {
             <Stat label="p50 / p95" value={`${formatDuration(stats?.durationMs.p50)} / ${formatDuration(stats?.durationMs.p95)}`} />
             <Stat
               label="환각 경고"
-              value={stats ? String(stats.hallucinationWarnings) : '—'}
+              value={stats ? String(stats.hallucinationWarnings) : '-'}
               danger={!!stats && stats.hallucinationWarnings > 0}
             />
           </div>
@@ -273,18 +273,18 @@ export default function ObservabilityPage() {
           >
             <Stat
               label="LLM 폴백 라우팅"
-              value={quality ? ratio(quality.tierCounts.llm_fallback ?? 0, quality.total) : '—'}
+              value={quality ? ratio(quality.tierCounts.llm_fallback ?? 0, quality.total) : '-'}
               sub={quality ? `regex ${quality.tierCounts.regex ?? 0} · 재개 ${quality.tierCounts.hitl_resume ?? 0}` : undefined}
             />
             <Stat
               label="형식 경고"
-              value={quality ? String(quality.format.warnedTraces) : '—'}
+              value={quality ? String(quality.format.warnedTraces) : '-'}
               danger={!!quality && quality.format.warnedTraces > 0}
               sub={quality ? ratio(quality.format.warnedTraces, quality.total) : undefined}
             />
             <Stat
               label="프로필 재질문율"
-              value={quality ? ratio(quality.hitl.profileAsked, quality.total) : '—'}
+              value={quality ? ratio(quality.hitl.profileAsked, quality.total) : '-'}
               sub={quality ? `복구형 HITL ${ratio(quality.hitl.recovery, quality.total)}` : undefined}
             />
             <Stat
@@ -292,17 +292,17 @@ export default function ObservabilityPage() {
               value={
                 quality
                   ? `${quality.hitl.resumedSuccess}/${quality.hitl.resumed}`
-                  : '—'
+                  : '-'
               }
             />
             <Stat
               label="검색 재시도"
-              value={quality ? String(quality.safeguards.retrySearch) : '—'}
+              value={quality ? String(quality.safeguards.retrySearch) : '-'}
               sub={quality ? `HITL 회피 ${quality.safeguards.retrySearchRecovered}` : undefined}
             />
             <Stat
               label="정정 부록"
-              value={quality ? String(quality.safeguards.corrections) : '—'}
+              value={quality ? String(quality.safeguards.corrections) : '-'}
               sub={quality ? `예산 소진 ${quality.safeguards.budgetExhausted}` : undefined}
             />
           </div>
@@ -366,7 +366,7 @@ export default function ObservabilityPage() {
           <div
             style={{
               border: '1px solid var(--border)',
-              borderRadius: 10,
+              borderRadius: 12,
               overflow: 'hidden',
               background: 'var(--bg-surface)',
             }}
@@ -401,8 +401,8 @@ export default function ObservabilityPage() {
                       </div>
                     </Td>
                     <Td><StatusPill status={statusMap(run.status)} /></Td>
-                    <Td muted nowrap>{run.routeType ?? '—'}</Td>
-                    <Td muted nowrap>{run.model ?? '—'}</Td>
+                    <Td muted nowrap>{run.routeType ?? '-'}</Td>
+                    <Td muted nowrap>{run.model ?? '-'}</Td>
                     <Td muted nowrap>{formatDuration(run.durationMs)}</Td>
                     <Td muted nowrap>{run.toolNames?.length ?? 0}</Td>
                   </tr>
@@ -508,7 +508,7 @@ function RunDrawer({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                   <StatusPill status={statusMap(detail.status)} />
                   <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {detail.routeType ?? '—'} · {detail.model ?? '—'} · {formatDuration(detail.durationMs)}
+                    {detail.routeType ?? '-'} · {detail.model ?? '-'} ({formatDuration(detail.durationMs)})
                   </span>
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>
@@ -646,7 +646,7 @@ function Stat({
     <div
       style={{
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
         padding: '12px 14px',
         background: 'var(--bg-surface)',
       }}

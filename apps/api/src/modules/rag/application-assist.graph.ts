@@ -1,4 +1,4 @@
-import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { Annotation, END, START, StateGraph, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import {
   AIMessage,
@@ -14,7 +14,8 @@ import { combineRetrievalPromptBlocks, type RetrievalResult } from './retrieval.
 import { type RagGraphServices } from './rag.graph';
 import type { RagThinkPayload } from './thinking.types';
 import { detectAnswerNeedsHitl } from './hitl-detection';
-import { buildPendingHitlMeta } from './hitl-resume';
+import { buildPendingHitlMeta, type PendingHitl } from './hitl-resume';
+import { createAwaitHitlNode, type HitlInterruptPayload } from './hitl-interrupt';
 import { formatHitlFactsLine } from './profile-facts';
 import { APPLICATION_ASSIST_SYSTEM_PROMPT } from './prompts';
 import { checkApplicationAnswerFormat } from './answer-format';
@@ -57,9 +58,12 @@ const GraphState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => false,
   }),
-  streamCallback: Annotation<((token: string) => void) | null>(),
-  hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
   hitlMeta: Annotation<Record<string, unknown> | null>({
+    reducer: (_current, next) => next,
+    default: () => null,
+  }),
+  // interrupt() 대기 중인 HITL 설문. 콜백 함수는 state에 싣지 않는다(체크포인트 직렬화).
+  pendingHitl: Annotation<HitlInterruptPayload | null>({
     reducer: (_current, next) => next,
     default: () => null,
   }),
@@ -115,6 +119,7 @@ function dedupeResults(results: RetrievalResult[]) {
 async function streamAnswer(
   llm: ChatOpenAI,
   state: ApplicationGraphState,
+  emitToken: (token: string) => void,
   config?: RunnableConfig,
 ): Promise<Partial<ApplicationGraphState>> {
   const stream = await llm.stream(state.messages, {
@@ -132,7 +137,7 @@ async function streamAnswer(
 
     if (typeof aiChunk.content === 'string' && aiChunk.content) {
       answer += aiChunk.content;
-      state.streamCallback?.(aiChunk.content);
+      emitToken(aiChunk.content);
     }
   }
 
@@ -148,7 +153,10 @@ async function streamAnswer(
   };
 }
 
-export function createApplicationAssistGraph(services: RagGraphServices) {
+export function createApplicationAssistGraph(
+  services: RagGraphServices,
+  checkpointer?: BaseCheckpointSaver,
+) {
   const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
     if (!traceId) return;
     services.emitThink(traceId, input);
@@ -237,8 +245,8 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       profile: state.profile,
     });
 
-    state.hitlCallback?.(questionnaire);
-    state.streamCallback?.(clarification.prompt);
+    services.emitHitl(state.traceId, questionnaire);
+    services.emitToken(state.traceId, clarification.prompt);
 
     emitThink(state.traceId, {
       phase: '추가 정보 요청',
@@ -247,18 +255,21 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       status: 'done',
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'APPLICATION_ASSIST',
+      reason: 'missing_profile',
+      source: 'request_missing_info',
+      questionnaireId: questionnaire.id,
+      missingFields: clarification.missingFields,
+      threadId: state.traceId,
+    };
     return {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
       skipSave: false,
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'APPLICATION_ASSIST',
-        reason: 'missing_profile',
-        source: 'request_missing_info',
-        questionnaireId: questionnaire.id,
-        missingFields: clarification.missingFields,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -339,22 +350,25 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
         profile: state.profile,
         retrieval: combined,
       });
-      state.hitlCallback?.(questionnaire);
+      services.emitHitl(state.traceId, questionnaire);
       const message = '신청 방법을 정리할 근거가 부족해, 어떤 분야를 알아보시는지 먼저 확인하고 싶어요.';
-      state.streamCallback?.(message);
+      services.emitToken(state.traceId, message);
 
+      const pending: PendingHitl = {
+        originalQuestion: state.question,
+        routeType: 'APPLICATION_ASSIST',
+        reason: questionnaire.reason,
+        source: 'collect_application_context',
+        questionnaireId: questionnaire.id,
+        threadId: state.traceId,
+      };
       return {
         applicationContext: contextText,
         messages: [new AIMessage(message)],
         answer: message,
         skipSave: false,
-        hitlMeta: buildPendingHitlMeta({
-          originalQuestion: state.question,
-          routeType: 'APPLICATION_ASSIST',
-          reason: questionnaire.reason,
-          source: 'collect_application_context',
-          questionnaireId: questionnaire.id,
-        }),
+        hitlMeta: buildPendingHitlMeta(pending),
+        pendingHitl: { questionnaire, pending },
       };
     }
 
@@ -366,8 +380,8 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
 
   function routeAfterContext(
     state: ApplicationGraphState,
-  ): 'generate_answer' | 'save_message' {
-    return state.answer ? 'save_message' : 'generate_answer';
+  ): 'generate_answer' | 'save_hitl_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'generate_answer';
   }
 
   async function generateAnswer(
@@ -380,7 +394,7 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       node: 'generate_answer',
       status: 'active',
     });
-    return streamAnswer(llm, state, config);
+    return streamAnswer(llm, state, (token) => services.emitToken(state.traceId, token), config);
   }
 
   async function verifyAnswer(
@@ -407,7 +421,7 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       profile: state.profile,
       retrieval: null,
     });
-    state.hitlCallback?.(questionnaire);
+    services.emitHitl(state.traceId, questionnaire);
 
     services.recordEvent(state.traceId, {
       type: 'decision',
@@ -416,14 +430,17 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
       payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'APPLICATION_ASSIST',
+      reason: detection.reason ?? 'unknown',
+      source: 'verify_answer',
+      questionnaireId: questionnaire.id,
+      threadId: state.traceId,
+    };
     return {
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'APPLICATION_ASSIST',
-        reason: detection.reason ?? 'unknown',
-        source: 'verify_answer',
-        questionnaireId: questionnaire.id,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -441,10 +458,19 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
 
   function routeAfterMissingInfo(
     state: ApplicationGraphState,
-  ): 'collect_application_context' | 'save_message' {
-    return state.answer ? 'save_message' : 'collect_application_context';
+  ): 'collect_application_context' | 'save_hitl_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'collect_application_context';
   }
 
+  function routeAfterVerify(
+    state: ApplicationGraphState,
+  ): 'save_hitl_message' | 'save_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'save_message';
+  }
+
+  // save_hitl_message는 save_message와 같은 저장 로직이지만, 저장 후 END가 아니라
+  // await_hitl로 이어져 interrupt()로 그래프를 멈춘다. 보충 답변이 오면
+  // Command({resume})가 await_hitl부터 재개해 collect로 되돌아간다.
   return new StateGraph(GraphState)
     .addNode('load_context', loadContext)
     .addNode('request_missing_info', requestMissingInfo)
@@ -452,18 +478,25 @@ export function createApplicationAssistGraph(services: RagGraphServices) {
     .addNode('generate_answer', generateAnswer)
     .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
+    .addNode('save_hitl_message', saveMessage)
+    .addNode('await_hitl', createAwaitHitlNode<ApplicationGraphState>(services))
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
     .addConditionalEdges('request_missing_info', routeAfterMissingInfo, {
       collect_application_context: 'collect_application_context',
-      save_message: 'save_message',
+      save_hitl_message: 'save_hitl_message',
     })
     .addConditionalEdges('collect_application_context', routeAfterContext, {
       generate_answer: 'generate_answer',
-      save_message: 'save_message',
+      save_hitl_message: 'save_hitl_message',
     })
     .addEdge('generate_answer', 'verify_answer')
-    .addEdge('verify_answer', 'save_message')
+    .addConditionalEdges('verify_answer', routeAfterVerify, {
+      save_hitl_message: 'save_hitl_message',
+      save_message: 'save_message',
+    })
+    .addEdge('save_hitl_message', 'await_hitl')
+    .addEdge('await_hitl', 'collect_application_context')
     .addEdge('save_message', END)
-    .compile();
+    .compile({ checkpointer });
 }

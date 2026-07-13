@@ -534,7 +534,7 @@ export default function AdminTracesPage() {
                             <div
                               style={{
                                 padding: 12,
-                                borderRadius: 10,
+                                borderRadius: 12,
                                 background: 'var(--danger-soft)',
                                 color: 'var(--danger)',
                                 fontSize: 12,
@@ -595,7 +595,7 @@ export default function AdminTracesPage() {
                       <div
                         style={{
                           minHeight: 460,
-                          borderRadius: 10,
+                          borderRadius: 12,
                           overflow: 'hidden',
                           border: '1px solid var(--border)',
                           background: 'var(--bg-subtle)',
@@ -636,7 +636,7 @@ function TraceListItem({
         display: 'grid',
         gap: 8,
         padding: 12,
-        borderRadius: 10,
+        borderRadius: 12,
         background: selected ? 'var(--bg-surface)' : 'transparent',
         border: selected
           ? '1px solid var(--border-strong)'
@@ -927,7 +927,7 @@ function MiniStat({
         padding: 14,
         background: 'var(--bg-subtle)',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
       }}
     >
       <div

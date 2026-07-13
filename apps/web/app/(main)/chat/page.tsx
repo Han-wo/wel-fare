@@ -1,7 +1,7 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { ArrowUp, Bookmark, Loader2, MapPin, User as UserIcon } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useUserStore } from '../../../store/user.store';
@@ -41,13 +41,14 @@ const HOUSEHOLD_MAP: Record<string, string> = {
   SINGLE_PARENT: '한부모 가구',
 };
 
-export default function ChatIndexPage() {
+function ChatIndex() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const accessToken = useUserStore((s) => s.accessToken);
   const userName = useUserStore((s) => s.userName);
   const profile = useUserStore((s) => s.profile);
 
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => searchParams.get('q') ?? '');
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
@@ -134,7 +135,11 @@ export default function ChatIndexPage() {
           새 대화
         </h2>
         <div className="page-actions-responsive" style={{ display: 'flex', gap: 4 }}>
-          <button className="btn-ghost" onClick={() => router.push('/bookmarks')}>
+          <button
+            className="btn-ghost"
+            aria-label="저장한 정책"
+            onClick={() => router.push('/bookmarks')}
+          >
             <Bookmark size={14} />
           </button>
         </div>
@@ -266,6 +271,14 @@ export default function ChatIndexPage() {
                   key={s.body}
                   onClick={() => void startChat(s.body)}
                   disabled={loading}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--border-strong)';
+                    e.currentTarget.style.background = 'var(--bg-hover)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--border)';
+                    e.currentTarget.style.background = 'var(--bg-subtle)';
+                  }}
                   style={{
                     padding: 14,
                     borderRadius: 12,
@@ -311,5 +324,13 @@ export default function ChatIndexPage() {
         </div>
       </div>
     </>
+  );
+}
+
+export default function ChatIndexPage() {
+  return (
+    <Suspense fallback={null}>
+      <ChatIndex />
+    </Suspense>
   );
 }

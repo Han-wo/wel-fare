@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Calendar, Check, Loader2, MoreHorizontal } from 'lucide-react';
+import { Bell, Calendar, Check, MoreHorizontal } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { TagPill } from '../../../components/ui/tag-pill';
 import {
@@ -128,8 +128,8 @@ export default function BookmarksPage() {
               gap: 10,
               padding: '12px 14px',
               background: 'var(--warning-soft)',
-              border: '1px solid #e9d7a6',
-              borderRadius: 10,
+              border: '1px solid var(--warning)',
+              borderRadius: 12,
               marginBottom: 20,
             }}
           >
@@ -137,7 +137,7 @@ export default function BookmarksPage() {
             <span
               style={{
                 fontSize: 13,
-                color: '#6b4808',
+                color: 'var(--warning-text)',
                 lineHeight: 1.5,
               }}
             >
@@ -201,19 +201,10 @@ export default function BookmarksPage() {
         </div>
 
         {loading ? (
-          <div
-            style={{
-              padding: '64px 0',
-              textAlign: 'center',
-              color: 'var(--text-muted)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              width: '100%',
-            }}
-          >
-            <Loader2 size={16} className="animate-spin" /> 불러오는 중...
+          <div style={{ display: 'grid', gap: 8 }} aria-label="불러오는 중">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="skeleton" style={{ height: 84 }} />
+            ))}
           </div>
         ) : filtered.length === 0 ? (
           <div
@@ -253,7 +244,7 @@ export default function BookmarksPage() {
                     padding: '14px 16px',
                     background: 'var(--bg-surface)',
                     border: '1px solid var(--border)',
-                    borderRadius: 10,
+                    borderRadius: 12,
                     cursor: 'pointer',
                   }}
                 >

@@ -8,10 +8,11 @@ dist/
 .next-dev/
 *.tsbuildinfo
 
-# Env
+# Env (example 파일만 추적 허용)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # Turbo
 .turbo/

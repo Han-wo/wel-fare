@@ -223,27 +223,13 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              margin: '24px 0',
-              color: 'var(--text-faint)',
-              fontSize: 12,
-            }}
-          >
-            <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-            <span>또는</span>
-            <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-          </div>
-
           <p
             style={{
               fontSize: 14,
               color: 'var(--text-secondary)',
               textAlign: 'center',
-              margin: 0,
+              marginTop: 28,
+              marginBottom: 0,
             }}
           >
             계정이 없으신가요?{' '}

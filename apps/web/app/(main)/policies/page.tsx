@@ -5,6 +5,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { ArrowDownUp, Calendar, Loader2, MapPin, Search } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { PolicyListCard } from '../../../components/policy/policy-list-card';
+import { TagPill } from '../../../components/ui/tag-pill';
 import {
   type Policy,
   categoryLabel,
@@ -69,6 +70,7 @@ export default function PoliciesListPage() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -95,6 +97,7 @@ export default function PoliciesListPage() {
         loadingMoreRef.current = false;
         setLoadingMore(false);
         setLoading(true);
+        setLoadError(false);
       } else {
         loadingMoreRef.current = true;
         setLoadingMore(true);
@@ -127,6 +130,7 @@ export default function PoliciesListPage() {
           setTotal(0);
           setPage(1);
           setTotalPages(1);
+          setLoadError(true);
         }
       } finally {
         if (requestSeq !== requestSeqRef.current) return;

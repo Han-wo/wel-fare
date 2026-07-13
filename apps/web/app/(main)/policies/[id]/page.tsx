@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Bookmark as BookmarkIcon, Check, ExternalLink, FileText, Loader2 } from 'lucide-react';
+import { ArrowLeft, Bookmark as BookmarkIcon, Check, ExternalLink, FileText } from 'lucide-react';
 import { api } from '../../../../lib/api';
 import { TagPill } from '../../../../components/ui/tag-pill';
 import { Linkify } from '../../../../components/ui/linkify';
@@ -71,13 +71,22 @@ export default function PolicyDetailPage() {
       <div
         style={{
           flex: 1,
+          padding: '24px 28px',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--text-muted)',
+          flexDirection: 'column',
+          gap: 16,
+          maxWidth: 880,
         }}
+        aria-label="불러오는 중"
       >
-        <Loader2 size={18} className="animate-spin" />
+        <div className="skeleton" style={{ height: 20, width: 96, borderRadius: 999 }} />
+        <div className="skeleton" style={{ height: 36, width: '60%' }} />
+        <div className="skeleton" style={{ height: 96 }} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+          <div className="skeleton" style={{ height: 72 }} />
+          <div className="skeleton" style={{ height: 72 }} />
+        </div>
+        <div className="skeleton" style={{ height: 160 }} />
       </div>
     );
   }
@@ -391,7 +400,7 @@ function KeyMetric({
       style={{
         background: 'var(--bg-surface)',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
         padding: 16,
       }}
     >

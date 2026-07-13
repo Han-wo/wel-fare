@@ -112,6 +112,9 @@
   .btn-primary:hover {
     background: var(--accent-hover);
   }
+  .btn-primary:active {
+    transform: translateY(1px);
+  }
   .btn-primary:disabled {
     opacity: 0.55;
     cursor: not-allowed;
@@ -137,6 +140,9 @@
   .btn-secondary:hover {
     background: var(--bg-hover);
     border-color: var(--border-strong);
+  }
+  .btn-secondary:active {
+    transform: translateY(1px);
   }
   .btn-secondary:disabled {
     opacity: 0.55;
@@ -242,6 +248,29 @@
     font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--text-primary);
+  }
+
+  .chip {
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font);
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease,
+      transform 0.1s ease;
+  }
+  .chip:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+  }
+  .chip:active {
+    transform: scale(0.98);
   }
 }
 
@@ -560,6 +589,23 @@
     line-height: 1.08 !important;
   }
 
+  .landing-feature-wide {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 16px !important;
+  }
+
+  .landing-how-row {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  .landing-footer-inner {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 16px !important;
+  }
+
   .landing-features-grid,
   .three-col-grid-responsive,
   .four-col-grid-responsive,
@@ -723,6 +769,51 @@
   border-color: var(--border);
 }
 
+.skeleton {
+  background: var(--bg-hover);
+  border-radius: 12px;
+  animation: skeletonPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes skeletonPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.reveal {
+  opacity: 0;
+  animation: fadeUp 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.reveal-d1 {
+  animation-delay: 0.06s;
+}
+.reveal-d2 {
+  animation-delay: 0.12s;
+}
+.reveal-d3 {
+  animation-delay: 0.18s;
+}
+.reveal-d4 {
+  animation-delay: 0.24s;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .streaming-cursor::after {
   content: '|';
   animation: blink 1s step-end infinite;
@@ -763,6 +854,13 @@
     animation: none;
   }
   .thinking-phase-pulse {
+    animation: none;
+  }
+  .reveal {
+    animation: none;
+    opacity: 1;
+  }
+  .skeleton {
     animation: none;
   }
 }

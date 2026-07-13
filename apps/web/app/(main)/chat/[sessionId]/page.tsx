@@ -363,16 +363,14 @@ export default function ChatSessionPage() {
                       style={{
                         marginTop: 6,
                         width: '100%',
-                        borderRadius: 22,
+                        borderRadius: 16,
                         padding: isUser ? '14px 18px' : '16px 18px',
-                        background: isUser
-                          ? 'linear-gradient(135deg, #2f6f63 0%, #3d8578 100%)'
-                          : 'var(--bg-surface)',
+                        background: isUser ? 'var(--accent)' : 'var(--bg-surface)',
                         border: isUser ? 'none' : '1px solid var(--border)',
-                        boxShadow: isUser ? '0 16px 32px rgba(47, 111, 99, 0.18)' : 'var(--shadow)',
+                        boxShadow: isUser ? 'var(--shadow-md)' : 'var(--shadow)',
                         color: isUser ? '#f6fbf9' : 'var(--text-primary)',
-                        borderBottomRightRadius: isUser ? 8 : 22,
-                        borderBottomLeftRadius: isUser ? 22 : 8,
+                        borderBottomRightRadius: isUser ? 8 : 16,
+                        borderBottomLeftRadius: isUser ? 16 : 8,
                         overflowWrap: 'anywhere',
                       }}
                     >
@@ -492,7 +490,7 @@ export default function ChatSessionPage() {
             margin: '0 auto',
             background: 'var(--bg-surface)',
             border: '1px solid var(--border)',
-            borderRadius: 14,
+            borderRadius: 16,
             padding: 12,
             boxShadow: 'var(--shadow)',
           }}

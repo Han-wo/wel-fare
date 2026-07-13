@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight, FileCheck, ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
 import { BrandMark } from '../components/brand-mark';
 
 const SAMPLE_QUESTIONS = [
@@ -12,18 +12,20 @@ const SAMPLE_QUESTIONS = [
   '부모님 근처 복지시설과 돌봄 지원 같이 찾아줘',
 ];
 
-const FEATURES = [
+const OFFICIAL_SOURCES = ['정부24', '복지로', '지자체 공식 사이트'];
+
+const HOW_STEPS = [
   {
-    title: '공식 출처만',
-    body: '정부24, 복지로, 지자체 공식 사이트에서 확인된 제도만 안내합니다.',
+    title: '질문하기',
+    body: '지금 상황과 필요한 지원을 평소 말하듯 질문하세요. 복잡한 검색 조건은 필요 없습니다.',
   },
   {
-    title: '내 조건 기준',
-    body: '거주 지역, 가구 형태, 소득 수준 등을 반영해 실제 받을 수 있는 지원만 필터링합니다.',
+    title: '조건 확인',
+    body: '거주 지역, 가구 형태, 소득 수준을 기준으로 실제 신청 가능한 제도만 추려서 보여드립니다.',
   },
   {
-    title: '신청 경로까지',
-    body: '대상 조건, 마감 여부, 공식 신청 링크를 한 번에 정리해 드립니다.',
+    title: '바로 신청',
+    body: '대상 조건, 마감 일정, 공식 신청 링크를 한 번에 확인하고 바로 신청할 수 있습니다.',
   },
 ];
 
@@ -39,7 +41,7 @@ export default function LandingPage() {
   };
 
   return (
-    <div style={{ background: 'var(--bg-canvas)', minHeight: '100vh' }}>
+    <div style={{ background: 'var(--bg-canvas)', minHeight: '100dvh' }}>
       <header
         className="landing-header-responsive"
         style={{
@@ -48,7 +50,9 @@ export default function LandingPage() {
           justifyContent: 'space-between',
           padding: '20px 48px',
           borderBottom: '1px solid var(--border)',
-          background: 'rgba(245, 243, 238, 0.8)',
+          background: 'rgba(245, 243, 238, 0.85)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
           position: 'sticky',
           top: 0,
           zIndex: 10,
@@ -78,15 +82,16 @@ export default function LandingPage() {
 
       <main
         className="landing-main-responsive"
-        style={{ padding: '96px 48px 64px', maxWidth: 1120, margin: '0 auto' }}
+        style={{ padding: '96px 48px 0', maxWidth: 1120, margin: '0 auto' }}
       >
         <div style={{ maxWidth: 720 }}>
           <div
+            className="reveal"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 8,
-              padding: '6px 10px',
+              padding: '6px 12px',
               borderRadius: 999,
               background: 'var(--accent-soft)',
               color: 'var(--accent-text)',
@@ -95,19 +100,11 @@ export default function LandingPage() {
               marginBottom: 28,
             }}
           >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: 999,
-                background: 'var(--accent)',
-              }}
-            />
             복지 정보 AI 컨시어지
           </div>
 
           <h1
-            className="landing-hero-title"
+            className="landing-hero-title reveal reveal-d1"
             style={{
               fontSize: 64,
               lineHeight: 1.05,
@@ -123,6 +120,7 @@ export default function LandingPage() {
           </h1>
 
           <p
+            className="reveal reveal-d2"
             style={{
               fontSize: 18,
               lineHeight: 1.6,
@@ -138,6 +136,7 @@ export default function LandingPage() {
         </div>
 
         <div
+          className="reveal reveal-d3"
           style={{
             marginTop: 40,
             maxWidth: 720,
@@ -200,7 +199,7 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <div style={{ marginTop: 20, maxWidth: 720 }}>
+        <div className="reveal reveal-d4" style={{ marginTop: 20, maxWidth: 720 }}>
           <p
             style={{
               fontSize: 12,
@@ -214,44 +213,112 @@ export default function LandingPage() {
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {SAMPLE_QUESTIONS.map((s) => (
-              <button
-                key={s}
-                onClick={() => setQuestion(s)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border)',
-                  fontSize: 13,
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontFamily: 'var(--font)',
-                }}
-              >
+              <button key={s} className="chip" onClick={() => setQuestion(s)}>
                 {s}
               </button>
             ))}
           </div>
         </div>
 
-        <div
-          id="features"
-          className="landing-features-grid"
-          style={{
-            marginTop: 96,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 16,
-          }}
-        >
-          {FEATURES.map((f, i) => (
+        <section id="features" style={{ marginTop: 112 }}>
+          <h2
+            style={{
+              fontSize: 28,
+              fontWeight: 600,
+              letterSpacing: '-0.02em',
+              margin: '0 0 24px',
+              color: 'var(--text-primary)',
+            }}
+          >
+            이런 기준으로 안내합니다
+          </h2>
+          <div
+            className="landing-features-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: 16,
+            }}
+          >
             <div
-              key={f.title}
+              className="landing-feature-wide"
+              style={{
+                gridColumn: '1 / -1',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 24,
+                padding: '28px 24px',
+                borderRadius: 12,
+                border: '1px solid var(--border)',
+                background: 'var(--accent-soft)',
+              }}
+            >
+              <div
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 8,
+                  background: 'var(--bg-surface)',
+                  color: 'var(--accent)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <ShieldCheck size={20} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3
+                  style={{
+                    fontSize: 17,
+                    fontWeight: 600,
+                    margin: 0,
+                    letterSpacing: '-0.01em',
+                    color: 'var(--accent-text)',
+                  }}
+                >
+                  공식 출처만 안내합니다
+                </h3>
+                <p
+                  style={{
+                    fontSize: 14,
+                    lineHeight: 1.6,
+                    color: 'var(--text-secondary)',
+                    marginTop: 6,
+                    marginBottom: 0,
+                  }}
+                >
+                  출처가 확인되지 않은 제도는 답변에서 제외합니다.
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {OFFICIAL_SOURCES.map((src) => (
+                  <span
+                    key={src}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border)',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: 'var(--text-secondary)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {src}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div
               style={{
                 padding: 24,
                 borderRadius: 12,
                 border: '1px solid var(--border)',
-                background: 'var(--bg-subtle)',
+                background: 'var(--bg-surface)',
               }}
             >
               <div
@@ -265,21 +332,12 @@ export default function LandingPage() {
                   alignItems: 'center',
                   justifyContent: 'center',
                   marginBottom: 16,
-                  fontFamily: 'Times New Roman, serif',
-                  fontWeight: 600,
                 }}
               >
-                {String(i + 1).padStart(2, '0')}
+                <UserCheck size={16} />
               </div>
-              <h3
-                style={{
-                  fontSize: 16,
-                  fontWeight: 600,
-                  margin: 0,
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                {f.title}
+              <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>
+                내 조건 기준
               </h3>
               <p
                 style={{
@@ -290,12 +348,161 @@ export default function LandingPage() {
                   marginBottom: 0,
                 }}
               >
-                {f.body}
+                거주 지역, 가구 형태, 소득 수준 등을 반영해 실제 받을 수 있는 지원만
+                필터링합니다.
               </p>
             </div>
-          ))}
-        </div>
+
+            <div
+              style={{
+                padding: 24,
+                borderRadius: 12,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-surface)',
+              }}
+            >
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  background: 'var(--accent-soft)',
+                  color: 'var(--accent)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 16,
+                }}
+              >
+                <FileCheck size={16} />
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>
+                신청 경로까지
+              </h3>
+              <p
+                style={{
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  color: 'var(--text-secondary)',
+                  marginTop: 8,
+                  marginBottom: 0,
+                }}
+              >
+                대상 조건, 마감 여부, 공식 신청 링크를 한 번에 정리해 드립니다.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="how" style={{ marginTop: 112, paddingBottom: 96 }}>
+          <h2
+            style={{
+              fontSize: 28,
+              fontWeight: 600,
+              letterSpacing: '-0.02em',
+              margin: '0 0 8px',
+              color: 'var(--text-primary)',
+            }}
+          >
+            질문에서 신청까지, 세 단계
+          </h2>
+          <p
+            style={{
+              fontSize: 15,
+              lineHeight: 1.6,
+              color: 'var(--text-secondary)',
+              margin: '0 0 12px',
+              maxWidth: 560,
+            }}
+          >
+            회원가입 시 입력한 조건은 모든 답변에 자동으로 반영됩니다.
+          </p>
+          <div>
+            {HOW_STEPS.map((step) => (
+              <div
+                key={step.title}
+                className="landing-how-row"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '220px 1fr',
+                  gap: 24,
+                  padding: '28px 0',
+                  borderTop: '1px solid var(--border)',
+                  alignItems: 'baseline',
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 600,
+                    letterSpacing: '-0.02em',
+                    margin: 0,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {step.title}
+                </h3>
+                <p
+                  style={{
+                    fontSize: 15,
+                    lineHeight: 1.65,
+                    color: 'var(--text-secondary)',
+                    margin: 0,
+                    maxWidth: 560,
+                  }}
+                >
+                  {step.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
       </main>
+
+      <footer style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-subtle)' }}>
+        <div
+          className="landing-footer-inner"
+          style={{
+            maxWidth: 1120,
+            margin: '0 auto',
+            padding: '32px 48px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 24,
+          }}
+        >
+          <div style={{ maxWidth: 480 }}>
+            <div className="brand-lockup">
+              <BrandMark />
+              welFareAI
+            </div>
+            <p
+              style={{
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: 'var(--text-muted)',
+                marginTop: 12,
+                marginBottom: 0,
+              }}
+            >
+              welFareAI는 정부24, 복지로, 지자체 공식 사이트에 공개된 정보를 기반으로
+              안내합니다. 최종 신청 조건과 일정은 각 기관의 공고를 확인하세요.
+            </p>
+          </div>
+          <nav style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <a className="btn-ghost" href="#features">
+              소개
+            </a>
+            <a className="btn-ghost" href="#how">
+              사용 방법
+            </a>
+            <Link href="/login" className="btn-ghost">
+              로그인
+            </Link>
+          </nav>
+        </div>
+      </footer>
     </div>
   );
 }

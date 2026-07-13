@@ -180,17 +180,34 @@ export function Sidebar() {
         최근 대화
       </p>
       {filteredSessions.length === 0 ? (
-        <p
+        <div
           style={{
-            fontSize: 12,
-            color: 'var(--text-muted)',
-            padding: '8px 10px',
-            margin: 0,
-            lineHeight: 1.5,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            padding: '20px 10px',
+            textAlign: 'center',
           }}
         >
-          {query ? '검색 결과가 없습니다.' : '아직 저장된 대화가 없습니다.'}
-        </p>
+          {query ? (
+            <Search size={16} style={{ color: 'var(--text-faint)' }} />
+          ) : (
+            <MessageSquare size={16} style={{ color: 'var(--text-faint)' }} />
+          )}
+          <p
+            style={{
+              fontSize: 12,
+              color: 'var(--text-muted)',
+              margin: 0,
+              lineHeight: 1.5,
+            }}
+          >
+            {query
+              ? '검색 결과가 없습니다.'
+              : '아직 대화가 없습니다. 새 질문으로 시작해보세요.'}
+          </p>
+        </div>
       ) : (
         filteredSessions.slice(0, 40).map((s) => {
           const active = s.id === activeSessionId;
@@ -207,6 +224,12 @@ export function Sidebar() {
                 }
               }}
               className="group"
+              onMouseEnter={(event) => {
+                if (!active) event.currentTarget.style.background = 'var(--bg-hover)';
+              }}
+              onMouseLeave={(event) => {
+                if (!active) event.currentTarget.style.background = 'transparent';
+              }}
               style={{
                 width: '100%',
                 display: 'flex',
@@ -218,6 +241,7 @@ export function Sidebar() {
                 cursor: 'pointer',
                 textAlign: 'left',
                 fontFamily: 'var(--font)',
+                transition: 'background 0.15s ease',
                 marginBottom: 2,
               }}
             >
@@ -327,6 +351,12 @@ export function Sidebar() {
               key={key}
               href={href}
               title={label}
+              onMouseEnter={(event) => {
+                if (activeNavKey !== key) event.currentTarget.style.background = 'var(--bg-hover)';
+              }}
+              onMouseLeave={(event) => {
+                if (activeNavKey !== key) event.currentTarget.style.background = 'transparent';
+              }}
               style={{
                 display: 'flex',
                 width: '100%',
@@ -335,6 +365,7 @@ export function Sidebar() {
                 borderRadius: 8,
                 background: activeNavKey === key ? 'var(--accent-soft)' : 'transparent',
                 color: activeNavKey === key ? 'var(--accent-text)' : 'var(--text-secondary)',
+                transition: 'background 0.15s ease',
               }}
             >
               <Icon size={16} />
@@ -579,7 +610,7 @@ export function Sidebar() {
                   alignItems: 'center',
                   gap: 10,
                   padding: '10px 12px',
-                  borderRadius: 10,
+                  borderRadius: 8,
                   background: active ? 'var(--accent-soft)' : 'transparent',
                   color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
                   fontSize: 13,

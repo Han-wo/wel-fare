@@ -8,7 +8,7 @@ import type {
   HitlQuestionnaire,
 } from '../hooks/useChat';
 
-// useChat.HitlAnswers와 동일한 모양 — 제출 시 구조화된 형태 그대로 백엔드에 전달된다.
+// useChat.HitlAnswers와 동일한 모양. 제출 시 구조화된 형태 그대로 백엔드에 전달된다.
 type Answers = Record<string, { value: string; label: string } | 'skipped'>;
 
 export function HitlPanel({
@@ -488,5 +488,5 @@ function composeAnswerText(questions: HitlQuestion[], answers: Answers) {
     return '방금 답변은 건너뛸게요. 기존 정보로 다시 찾아주세요.';
   }
 
-  return `방금 확인한 정보로 다시 찾아주세요 — ${fragments.join(', ')}`;
+  return `방금 확인한 정보로 다시 찾아주세요: ${fragments.join(', ')}`;
 }

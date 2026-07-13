@@ -132,7 +132,7 @@ export function AdminSidebar({ active }: { active: 'sync' | 'trace' | 'observabi
           margin: '0 10px 4px',
           background: 'var(--bg-surface)',
           border: '1px solid var(--border)',
-          borderRadius: 10,
+          borderRadius: 12,
         }}
       >
         <div

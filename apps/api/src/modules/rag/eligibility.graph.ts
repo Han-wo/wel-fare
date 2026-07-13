@@ -1,4 +1,4 @@
-import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { Annotation, END, START, StateGraph, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import {
   AIMessage,
@@ -15,7 +15,9 @@ import type { EligibilityRetrievalResult, RetrievalResult } from './retrieval.ty
 import { type RagGraphServices } from './rag.graph';
 import type { RagThinkPayload } from './thinking.types';
 import { detectAnswerNeedsHitl } from './hitl-detection';
-import { buildPendingHitlMeta } from './hitl-resume';
+import { missingProfileFields, parseEligibilityVerdict } from './eligibility-verdict';
+import { buildPendingHitlMeta, type PendingHitl } from './hitl-resume';
+import { createAwaitHitlNode, type HitlInterruptPayload } from './hitl-interrupt';
 import { formatHitlFactsLine } from './profile-facts';
 import { ELIGIBILITY_SYSTEM_PROMPT } from './prompts';
 import { checkEligibilityAnswerFormat } from './answer-format';
@@ -49,9 +51,12 @@ const GraphState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => false,
   }),
-  streamCallback: Annotation<((token: string) => void) | null>(),
-  hitlCallback: Annotation<((payload: import('./hitl.types').HitlQuestionnaire) => void) | null>(),
   hitlMeta: Annotation<Record<string, unknown> | null>({
+    reducer: (_current, next) => next,
+    default: () => null,
+  }),
+  // interrupt() 대기 중인 HITL 설문. 콜백 함수는 state에 싣지 않는다(체크포인트 직렬화).
+  pendingHitl: Annotation<HitlInterruptPayload | null>({
     reducer: (_current, next) => next,
     default: () => null,
   }),
@@ -92,6 +97,7 @@ function formatProfile(profile: UserProfile | null): string {
 async function streamAnswer(
   llm: ChatOpenAI,
   state: EligibilityGraphState,
+  emitToken: (token: string) => void,
   config?: RunnableConfig,
 ): Promise<Partial<EligibilityGraphState>> {
   const stream = await llm.stream(state.messages, {
@@ -109,7 +115,7 @@ async function streamAnswer(
 
     if (typeof aiChunk.content === 'string' && aiChunk.content) {
       answer += aiChunk.content;
-      state.streamCallback?.(aiChunk.content);
+      emitToken(aiChunk.content);
     }
   }
 
@@ -125,7 +131,10 @@ async function streamAnswer(
   };
 }
 
-export function createEligibilityGraph(services: RagGraphServices) {
+export function createEligibilityGraph(
+  services: RagGraphServices,
+  checkpointer?: BaseCheckpointSaver,
+) {
   const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
     if (!traceId) return;
     services.emitThink(traceId, input);
@@ -214,8 +223,8 @@ export function createEligibilityGraph(services: RagGraphServices) {
       profile: state.profile,
     });
 
-    state.hitlCallback?.(questionnaire);
-    state.streamCallback?.(clarification.prompt);
+    services.emitHitl(state.traceId, questionnaire);
+    services.emitToken(state.traceId, clarification.prompt);
 
     emitThink(state.traceId, {
       phase: '추가 정보 요청',
@@ -224,18 +233,21 @@ export function createEligibilityGraph(services: RagGraphServices) {
       status: 'done',
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'ELIGIBILITY',
+      reason: 'missing_profile',
+      source: 'request_missing_info',
+      questionnaireId: questionnaire.id,
+      missingFields: clarification.missingFields,
+      threadId: state.traceId,
+    };
     return {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
       skipSave: false,
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'ELIGIBILITY',
-        reason: 'missing_profile',
-        source: 'request_missing_info',
-        questionnaireId: questionnaire.id,
-        missingFields: clarification.missingFields,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -294,9 +306,9 @@ export function createEligibilityGraph(services: RagGraphServices) {
         profile: state.profile,
         retrieval: result,
       });
-      state.hitlCallback?.(questionnaire);
+      services.emitHitl(state.traceId, questionnaire);
       const message = '관련 근거가 부족해 먼저 질문 범위를 확인하고 싶어요.';
-      state.streamCallback?.(message);
+      services.emitToken(state.traceId, message);
 
       services.recordEvent(state.traceId, {
         type: 'decision',
@@ -305,18 +317,21 @@ export function createEligibilityGraph(services: RagGraphServices) {
         payload: { candidateCount: result.items.length, reason: questionnaire.reason },
       });
 
+      const pending: PendingHitl = {
+        originalQuestion: state.question,
+        routeType: 'ELIGIBILITY',
+        reason: questionnaire.reason,
+        source: 'collect_eligibility_context',
+        questionnaireId: questionnaire.id,
+        threadId: state.traceId,
+      };
       return {
         eligibilityContext: contextText,
         messages: [new AIMessage(message)],
         answer: message,
         skipSave: false,
-        hitlMeta: buildPendingHitlMeta({
-          originalQuestion: state.question,
-          routeType: 'ELIGIBILITY',
-          reason: questionnaire.reason,
-          source: 'collect_eligibility_context',
-          questionnaireId: questionnaire.id,
-        }),
+        hitlMeta: buildPendingHitlMeta(pending),
+        pendingHitl: { questionnaire, pending },
       };
     }
 
@@ -328,8 +343,8 @@ export function createEligibilityGraph(services: RagGraphServices) {
 
   function routeAfterContext(
     state: EligibilityGraphState,
-  ): 'generate_answer' | 'save_message' {
-    return state.answer ? 'save_message' : 'generate_answer';
+  ): 'generate_answer' | 'save_hitl_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'generate_answer';
   }
 
   async function generateAnswer(
@@ -342,7 +357,7 @@ export function createEligibilityGraph(services: RagGraphServices) {
       node: 'generate_answer',
       status: 'active',
     });
-    return streamAnswer(llm, state, config);
+    return streamAnswer(llm, state, (token) => services.emitToken(state.traceId, token), config);
   }
 
   async function verifyAnswer(
@@ -361,15 +376,58 @@ export function createEligibilityGraph(services: RagGraphServices) {
       }
     }
 
+    if (state.hitlResumed) return {};
+
+    // 1차: 프롬프트 계약(첫 줄 판정 태그)을 구조화 verdict로 소비한다.
+    // [불확실] + 프로필 미입력 필드가 있으면, 엉뚱한 분야 재질문 대신
+    // 정확히 그 부족한 정보(나이/지역/소득)를 되묻는다.
+    const verdict = parseEligibilityVerdict(state.answer);
+    if (verdict === 'uncertain') {
+      const missing = missingProfileFields(state.profile);
+      // 프로필이 완전한데 [불확실]이면 부족한 건 문서 측 확인 사항이다.
+      // 답변 본문이 확인 경로를 이미 안내하므로 되묻지 않는다.
+      if (missing.length === 0) return {};
+
+      const questionnaire = await services.hitlSuggestion.buildMissingFieldQuestionnaire({
+        missingFields: missing,
+        question: state.question,
+        profile: state.profile,
+      });
+      services.emitHitl(state.traceId, questionnaire);
+
+      services.recordEvent(state.traceId, {
+        type: 'decision',
+        title: '답변 후 HITL 전환',
+        detail: `판정이 [불확실]이고 프로필 미입력 필드(${missing.join(', ')})가 있어 해당 정보를 되묻습니다.`,
+        payload: { verdict, missingFields: missing, questionnaireId: questionnaire.id },
+      });
+
+      const pending: PendingHitl = {
+        originalQuestion: state.question,
+        routeType: 'ELIGIBILITY',
+        reason: 'uncertain_missing_profile',
+        source: 'verify_answer',
+        questionnaireId: questionnaire.id,
+        missingFields: missing,
+        threadId: state.traceId,
+      };
+      return {
+        hitlMeta: buildPendingHitlMeta(pending),
+        pendingHitl: { questionnaire, pending },
+      };
+    }
+    if (verdict !== null) return {}; // [가능]/[어려움]은 완결된 판정 — 재질문 불필요
+
+    // 2차: 판정 태그가 없는 답변(형식 위반·실패 답변)만 reactive 안전망을 태운다.
     const detection = detectAnswerNeedsHitl(state.answer);
-    if (!detection.needsHitl || state.hitlResumed) return {};
+    if (!detection.needsHitl) return {};
 
     const questionnaire = await services.hitlSuggestion.buildRecoveryQuestionnaire({
       question: state.question,
       profile: state.profile,
       retrieval: null,
     });
-    state.hitlCallback?.(questionnaire);
+    services.emitHitl(state.traceId, questionnaire);
 
     services.recordEvent(state.traceId, {
       type: 'decision',
@@ -378,14 +436,17 @@ export function createEligibilityGraph(services: RagGraphServices) {
       payload: { detectionReason: detection.reason, questionnaireId: questionnaire.id },
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'ELIGIBILITY',
+      reason: detection.reason ?? 'unknown',
+      source: 'verify_answer',
+      questionnaireId: questionnaire.id,
+      threadId: state.traceId,
+    };
     return {
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'ELIGIBILITY',
-        reason: detection.reason ?? 'unknown',
-        source: 'verify_answer',
-        questionnaireId: questionnaire.id,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -403,10 +464,19 @@ export function createEligibilityGraph(services: RagGraphServices) {
 
   function routeAfterMissingInfo(
     state: EligibilityGraphState,
-  ): 'collect_eligibility_context' | 'save_message' {
-    return state.answer ? 'save_message' : 'collect_eligibility_context';
+  ): 'collect_eligibility_context' | 'save_hitl_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'collect_eligibility_context';
   }
 
+  function routeAfterVerify(
+    state: EligibilityGraphState,
+  ): 'save_hitl_message' | 'save_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'save_message';
+  }
+
+  // save_hitl_message는 save_message와 같은 저장 로직이지만, 저장 후 END가 아니라
+  // await_hitl로 이어져 interrupt()로 그래프를 멈춘다. 보충 답변이 오면
+  // Command({resume})가 await_hitl부터 재개해 collect로 되돌아간다.
   return new StateGraph(GraphState)
     .addNode('load_context', loadContext)
     .addNode('request_missing_info', requestMissingInfo)
@@ -414,18 +484,25 @@ export function createEligibilityGraph(services: RagGraphServices) {
     .addNode('generate_answer', generateAnswer)
     .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
+    .addNode('save_hitl_message', saveMessage)
+    .addNode('await_hitl', createAwaitHitlNode<EligibilityGraphState>(services))
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
     .addConditionalEdges('request_missing_info', routeAfterMissingInfo, {
       collect_eligibility_context: 'collect_eligibility_context',
-      save_message: 'save_message',
+      save_hitl_message: 'save_hitl_message',
     })
     .addConditionalEdges('collect_eligibility_context', routeAfterContext, {
       generate_answer: 'generate_answer',
-      save_message: 'save_message',
+      save_hitl_message: 'save_hitl_message',
     })
     .addEdge('generate_answer', 'verify_answer')
-    .addEdge('verify_answer', 'save_message')
+    .addConditionalEdges('verify_answer', routeAfterVerify, {
+      save_hitl_message: 'save_hitl_message',
+      save_message: 'save_message',
+    })
+    .addEdge('save_hitl_message', 'await_hitl')
+    .addEdge('await_hitl', 'collect_eligibility_context')
     .addEdge('save_message', END)
-    .compile();
+    .compile({ checkpointer });
 }

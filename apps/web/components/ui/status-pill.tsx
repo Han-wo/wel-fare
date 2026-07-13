@@ -1,10 +1,10 @@
 export type PipelineStatus = 'success' | 'running' | 'failed' | 'pending';
 
 const MAP: Record<PipelineStatus, { bg: string; color: string; dot: string; label: string }> = {
-  success: { bg: 'var(--success-soft)', color: 'var(--success)', dot: '#4a7c59', label: '성공' },
-  running: { bg: '#fdf2d9', color: '#8a5d10', dot: '#c98f2b', label: '실행 중' },
-  failed: { bg: 'var(--danger-soft)', color: 'var(--danger)', dot: '#b54b3a', label: '실패' },
-  pending: { bg: 'var(--bg-hover)', color: 'var(--text-muted)', dot: '#8a8678', label: '대기' },
+  success: { bg: 'var(--success-soft)', color: 'var(--success)', dot: 'var(--success)', label: '성공' },
+  running: { bg: 'var(--warning-soft)', color: 'var(--warning-text)', dot: 'var(--warning)', label: '실행 중' },
+  failed: { bg: 'var(--danger-soft)', color: 'var(--danger)', dot: 'var(--danger)', label: '실패' },
+  pending: { bg: 'var(--bg-hover)', color: 'var(--text-muted)', dot: 'var(--text-muted)', label: '대기' },
 };
 
 export function StatusPill({ status, label }: { status: PipelineStatus; label?: string }) {

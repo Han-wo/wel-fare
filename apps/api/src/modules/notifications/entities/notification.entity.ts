@@ -23,6 +23,10 @@ export class Notification {
   @Column({ default: false })
   isRead: boolean;
 
+  // 동일 알림 재발송 방지 키 (예: deadline:{userId}:{policyId}:{dDay})
+  @Column({ type: 'varchar', nullable: true, unique: true })
+  dedupeKey?: string | null;
+
   @Column({ nullable: true })
   sentAt?: Date;
 

@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -99,8 +99,10 @@ const CHECK_OPTIONS: Array<{ key: keyof Step3; label: string }> = [
   { key: 'hasChildren', label: '자녀 있음 (만 18세 미만)' },
 ];
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pendingQuestion = searchParams.get('q');
   const setAuth = useUserStore((s) => s.setAuth);
   const setProfile = useUserStore((s) => s.setProfile);
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -195,7 +197,9 @@ export default function RegisterPage() {
         hasChildren: all.hasChildren ?? false,
         childrenCount: all.childrenCount ?? 0,
       });
-      router.push('/chat');
+      router.push(
+        pendingQuestion ? `/chat?q=${encodeURIComponent(pendingQuestion)}` : '/chat',
+      );
     } catch (e: unknown) {
       const msg = (e as { data?: { message?: string } })?.data?.message;
       setServerError(msg ?? '회원가입 중 오류가 발생했습니다.');
@@ -204,7 +208,7 @@ export default function RegisterPage() {
 
   const stepHeadings = {
     1: { title: '기본 정보', desc: '로그인에 사용할 계정 정보를 입력해주세요.' },
-    2: { title: '개인 정보', desc: '추천 정확도를 위해 기본 정보를 알려주세요.' },
+    2: { title: '개인 정보', desc: '정확한 추천을 위해 인적 사항을 알려주세요.' },
     3: { title: '추가 정보', desc: '해당되는 상황을 선택하면 더 정밀한 추천이 가능합니다.' },
   } as const;
 
@@ -238,7 +242,13 @@ export default function RegisterPage() {
 
         <div>
           <h2
-            style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}
+            style={{
+              fontSize: 28,
+              fontWeight: 500,
+              lineHeight: 1.35,
+              letterSpacing: '-0.02em',
+              margin: 0,
+            }}
           >
             맞춤 추천을 위해
             <br />
@@ -330,7 +340,7 @@ export default function RegisterPage() {
                           : done
                             ? 'var(--text-primary)'
                             : 'var(--border-strong)',
-                        color: '#fff',
+                        color: active || done ? 'var(--bg-surface)' : 'var(--text-primary)',
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -350,15 +360,15 @@ export default function RegisterPage() {
             })}
           </div>
 
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}>
+          <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', margin: 0 }}>
             {stepHeadings[step].title}
           </h1>
           <p
             style={{
               fontSize: 14,
               color: 'var(--text-secondary)',
-              marginTop: 6,
-              marginBottom: 28,
+              marginTop: 8,
+              marginBottom: 32,
             }}
           >
             {stepHeadings[step].desc}
@@ -488,6 +498,12 @@ export default function RegisterPage() {
                     return (
                       <label
                         key={v}
+                        onMouseEnter={(e) => {
+                          if (!active) e.currentTarget.style.borderColor = 'var(--border-strong)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
                         style={{
                           padding: '10px 12px',
                           borderRadius: 8,
@@ -498,6 +514,7 @@ export default function RegisterPage() {
                           cursor: 'pointer',
                           fontWeight: active ? 500 : 400,
                           textAlign: 'center',
+                          transition: 'border-color 0.15s ease, background 0.15s ease',
                         }}
                       >
                         <input
@@ -544,6 +561,12 @@ export default function RegisterPage() {
                     return (
                       <label
                         key={v}
+                        onMouseEnter={(e) => {
+                          if (!active) e.currentTarget.style.borderColor = 'var(--border-strong)';
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!active) e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
                         style={{
                           padding: '10px 12px',
                           borderRadius: 8,
@@ -554,6 +577,7 @@ export default function RegisterPage() {
                           cursor: 'pointer',
                           fontWeight: active ? 500 : 400,
                           textAlign: 'left',
+                          transition: 'border-color 0.15s ease, background 0.15s ease',
                         }}
                       >
                         <input
@@ -635,6 +659,12 @@ export default function RegisterPage() {
                   {CHECK_OPTIONS.map(({ key, label }) => (
                     <label
                       key={key}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-strong)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border)';
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -646,6 +676,7 @@ export default function RegisterPage() {
                         fontSize: 13,
                         cursor: 'pointer',
                         color: 'var(--text-primary)',
+                        transition: 'border-color 0.15s ease',
                       }}
                     >
                       <input
@@ -734,5 +765,13 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterForm />
+    </Suspense>
   );
 }

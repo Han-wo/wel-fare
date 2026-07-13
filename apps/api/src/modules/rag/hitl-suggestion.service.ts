@@ -77,8 +77,11 @@ export class HitlSuggestionService {
     profile: UserProfile | null;
     retrieval: RetrievalResult | null;
   }): Promise<HitlQuestionnaire> {
-    const reason: HitlReason =
-      !input.retrieval || input.retrieval.items.length === 0
+    // retrieval이 null이면 검색 결과를 모르는 채 전환된 것(답변 후 감지 등).
+    // 비었다고 단정하는 문구를 쓰면 실제로 검색이 성공한 턴에서 거짓 안내가 된다.
+    const reason: HitlReason = !input.retrieval
+      ? 'ambiguous_intent'
+      : input.retrieval.items.length === 0
         ? 'empty_retrieval'
         : 'low_relevance';
 
@@ -88,13 +91,16 @@ export class HitlSuggestionService {
       input.retrieval,
     );
 
+    const detailByReason: Partial<Record<HitlReason, string>> = {
+      empty_retrieval: '검색 결과가 비어 있어 어떤 방향을 원하시는지 확인이 필요합니다.',
+      low_relevance: '검색 결과의 관련도가 낮아 방향을 다시 확인하고 싶습니다.',
+      ambiguous_intent: '더 정확한 안내를 위해 찾으시는 방향을 확인하고 싶습니다.',
+    };
+
     return {
       id: this.generateId('recovery'),
       reason,
-      detail:
-        reason === 'empty_retrieval'
-          ? '검색 결과가 비어 있어 어떤 방향을 원하시는지 확인이 필요합니다.'
-          : '검색 결과의 관련도가 낮아 방향을 다시 확인하고 싶습니다.',
+      detail: detailByReason[reason] ?? detailByReason.ambiguous_intent!,
       questions: [question],
     };
   }

@@ -179,7 +179,7 @@ function formatTime(value: string) {
 }
 
 function formatDateTime(value: string | null) {
-  if (!value) return '—';
+  if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString('ko-KR');
@@ -428,7 +428,7 @@ export default function AdminPage() {
             <div
               style={{
                 padding: '12px 16px',
-                borderRadius: 10,
+                borderRadius: 12,
                 background: 'var(--danger-soft)',
                 color: 'var(--danger)',
                 fontSize: 13,
@@ -448,7 +448,7 @@ export default function AdminPage() {
               padding: '10px 14px',
               background: 'var(--bg-surface)',
               border: '1px solid var(--border)',
-              borderRadius: 10,
+              borderRadius: 12,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -522,8 +522,8 @@ export default function AdminPage() {
             <StatCard
               icon={<Database size={16} />}
               label="총 벡터"
-              value={stats?.qdrant.pointsCount.toLocaleString() ?? '—'}
-              sub={`${stats?.qdrant.vectorSize ?? 0}차원 · ${stats?.qdrant.collection ?? '—'}`}
+              value={stats?.qdrant.pointsCount.toLocaleString() ?? '-'}
+              sub={`${stats?.qdrant.vectorSize ?? 0}차원 · ${stats?.qdrant.collection ?? '-'}`}
             />
             <StatCard
               icon={<Network size={16} />}
@@ -534,8 +534,8 @@ export default function AdminPage() {
             <StatCard
               icon={<Activity size={16} />}
               label="인덱싱 완료"
-              value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '—'}
-              sub={`상태: ${stats?.qdrant.status ?? '—'}`}
+              value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '-'}
+              sub={`상태: ${stats?.qdrant.status ?? '-'}`}
             />
             <StatCard
               icon={<Shield size={16} />}
@@ -560,21 +560,21 @@ export default function AdminPage() {
                   gap: 1,
                   background: 'var(--border)',
                   border: '1px solid var(--border)',
-                  borderRadius: 10,
+                  borderRadius: 12,
                   overflow: 'hidden',
                 }}
               >
-                <InfoRow label="컬렉션" value={stats?.qdrant.collection ?? '—'} />
-                <InfoRow label="벡터 차원" value={String(stats?.qdrant.vectorSize ?? '—')} />
+                <InfoRow label="컬렉션" value={stats?.qdrant.collection ?? '-'} />
+                <InfoRow label="벡터 차원" value={String(stats?.qdrant.vectorSize ?? '-')} />
                 <InfoRow
                   label="총 포인트"
-                  value={stats?.qdrant.pointsCount.toLocaleString() ?? '—'}
+                  value={stats?.qdrant.pointsCount.toLocaleString() ?? '-'}
                 />
                 <InfoRow
                   label="인덱싱 완료"
-                  value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '—'}
+                  value={stats?.qdrant.indexedVectorsCount.toLocaleString() ?? '-'}
                 />
-                <InfoRow label="상태" value={stats?.qdrant.status ?? '—'} last />
+                <InfoRow label="상태" value={stats?.qdrant.status ?? '-'} last />
               </div>
             </Panel>
 
@@ -971,7 +971,7 @@ function FreshnessCard({ item }: { item: DataFreshnessSnapshot }) {
       style={{
         background: 'var(--bg-subtle)',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
         padding: 14,
       }}
     >
@@ -1016,7 +1016,7 @@ function FreshnessCard({ item }: { item: DataFreshnessSnapshot }) {
           label="마지막 성공 로그"
           value={formatDateTime(item.lastSuccessSyncAt)}
         />
-        <InfoStack label="최신 도메인 날짜" value={item.latestDataDate ?? '—'} />
+        <InfoStack label="최신 도메인 날짜" value={item.latestDataDate ?? '-'} />
       </div>
 
       <div
@@ -1085,7 +1085,7 @@ function SourceCard({ source }: { source: SyncSourceStatus }) {
       style={{
         background: 'var(--bg-subtle)',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
         padding: 14,
       }}
     >
@@ -1175,7 +1175,7 @@ function LogRow({ log }: { log: SyncLog }) {
         padding: '12px 14px',
         background: 'var(--bg-subtle)',
         border: '1px solid var(--border)',
-        borderRadius: 10,
+        borderRadius: 12,
       }}
     >
       <StatusPill status={statusMap(log.status)} />
@@ -1231,7 +1231,7 @@ function LogRow({ log }: { log: SyncLog }) {
           textAlign: 'right',
         }}
       >
-        {log.durationMs ? formatDuration(log.durationMs) : log.status === 'RUNNING' ? '실행 중' : '—'}
+        {log.durationMs ? formatDuration(log.durationMs) : log.status === 'RUNNING' ? '실행 중' : '-'}
       </span>
       <button className="btn-ghost" style={{ padding: 6 }}>
         <MoreHorizontal size={14} />

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Settings } from 'lucide-react';
+import { Settings } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { NotifRow, type NotifType } from '../../../components/notifications/notif-row';
 import { formatRelativeKoreanTime } from '../../../lib/datetime';
@@ -211,20 +211,10 @@ export default function NotificationsPage() {
         </div>
 
         {loading ? (
-          <div
-            style={{
-              padding: '64px 0',
-              textAlign: 'center',
-              color: 'var(--text-muted)',
-              fontSize: 14,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '100%',
-              gap: 8,
-            }}
-          >
-            <Loader2 size={16} className="animate-spin" /> 불러오는 중...
+          <div style={{ display: 'grid', gap: 8 }} aria-label="불러오는 중">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="skeleton" style={{ height: 76 }} />
+            ))}
           </div>
         ) : filtered.length === 0 ? (
           <div

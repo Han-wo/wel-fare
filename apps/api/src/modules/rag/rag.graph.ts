@@ -1,4 +1,4 @@
-import { StateGraph, END, START, Annotation } from '@langchain/langgraph';
+import { StateGraph, END, START, Annotation, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { ChatOpenAI } from '@langchain/openai';
 import { tool } from '@langchain/core/tools';
@@ -26,7 +26,8 @@ import { detectAnswerNeedsHitl } from './hitl-detection';
 import { assessNamedProgramCoverage, type RetrievedDoc } from './retrieval-confidence';
 import { checkAnswerGrounding } from './answer-grounding';
 import { hasCalledTool, isToolBudgetExhausted, MAX_TOOL_ROUNDS } from './tool-budget';
-import { buildPendingHitlMeta } from './hitl-resume';
+import { buildPendingHitlMeta, type PendingHitl } from './hitl-resume';
+import { createAwaitHitlNode, type HitlInterruptPayload } from './hitl-interrupt';
 import { formatHitlFactsLine } from './profile-facts';
 // 동적 사용자 정보(오늘 날짜/age/region/userId)는 별도 메시지로 분리해 prompt caching 적중률을 높인다.
 import {
@@ -58,9 +59,12 @@ const GraphState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => false,
   }),
-  streamCallback: Annotation<((token: string) => void) | null>(),
-  hitlCallback: Annotation<((payload: HitlQuestionnaire) => void) | null>(),
   hitlMeta: Annotation<Record<string, unknown> | null>({
+    reducer: (_current, next) => next,
+    default: () => null,
+  }),
+  // interrupt() 대기 중인 HITL 설문. 콜백 함수는 state에 싣지 않는다(체크포인트 직렬화).
+  pendingHitl: Annotation<HitlInterruptPayload | null>({
     reducer: (_current, next) => next,
     default: () => null,
   }),
@@ -154,6 +158,9 @@ export interface RagGraphServices {
     },
   ) => void;
   emitThink: (traceId: string, input: RagThinkPayload) => void;
+  // 답변 토큰·HITL 설문은 traceId 기반 레지스트리로 내보낸다 (rag-answer-stream.service).
+  emitToken: (traceId: string, token: string) => void;
+  emitHitl: (traceId: string, questionnaire: HitlQuestionnaire) => void;
   calcAge: (birthDate: string) => number;
   getSidoName: (code: string) => string;
 }
@@ -198,7 +205,10 @@ function collectRetrievedDocs(messages: BaseMessage[]): RetrievedDoc[] {
   return docs;
 }
 
-export function createRagGraph(services: RagGraphServices) {
+export function createRagGraph(
+  services: RagGraphServices,
+  checkpointer?: BaseCheckpointSaver,
+) {
   const emitThink = (traceId: string | null | undefined, input: RagThinkPayload) => {
     if (!traceId) return;
     services.emitThink(traceId, input);
@@ -623,8 +633,8 @@ export function createRagGraph(services: RagGraphServices) {
       profile: state.profile,
     });
 
-    state.hitlCallback?.(questionnaire);
-    state.streamCallback?.(clarification.prompt);
+    services.emitHitl(state.traceId, questionnaire);
+    services.emitToken(state.traceId, clarification.prompt);
 
     emitThink(state.traceId, {
       phase: '추가 정보 요청',
@@ -633,23 +643,26 @@ export function createRagGraph(services: RagGraphServices) {
       status: 'done',
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'SEARCH',
+      reason: 'missing_profile',
+      source: 'request_missing_info',
+      questionnaireId: questionnaire.id,
+      missingFields: clarification.missingFields,
+      threadId: state.traceId,
+    };
     return {
       messages: [new AIMessage(clarification.prompt)],
       answer: clarification.prompt,
       skipSave: false,
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'SEARCH',
-        reason: 'missing_profile',
-        source: 'request_missing_info',
-        questionnaireId: questionnaire.id,
-        missingFields: clarification.missingFields,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
-  function routeAfterMissingInfo(state: GraphStateType): 'save_message' | 'pre_route' {
-    return state.answer ? 'save_message' : 'pre_route';
+  function routeAfterMissingInfo(state: GraphStateType): 'save_hitl_message' | 'pre_route' {
+    return state.pendingHitl ? 'save_hitl_message' : 'pre_route';
   }
 
   async function agentNode(
@@ -707,7 +720,7 @@ export function createRagGraph(services: RagGraphServices) {
 
       if (!hasToolCall && typeof aiChunk.content === 'string' && aiChunk.content) {
         textAccumulated += aiChunk.content;
-        state.streamCallback?.(aiChunk.content);
+        services.emitToken(state.traceId, aiChunk.content);
       }
     }
 
@@ -850,23 +863,26 @@ export function createRagGraph(services: RagGraphServices) {
       retrieval: null,
     });
 
-    state.hitlCallback?.(questionnaire);
+    services.emitHitl(state.traceId, questionnaire);
 
     const message =
       '요청하신 내용을 정확히 찾지 못했어요. 아래에서 조건을 골라주시면 그 기준으로 다시 찾아드릴게요.';
-    state.streamCallback?.(message);
+    services.emitToken(state.traceId, message);
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'SEARCH',
+      reason: 'retrieval_entity_absent',
+      source: 'assess_retrieval',
+      questionnaireId: questionnaire.id,
+      threadId: state.traceId,
+    };
     return {
       messages: [new AIMessage(message)],
       answer: message,
       skipSave: false,
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'SEARCH',
-        reason: 'retrieval_entity_absent',
-        source: 'assess_retrieval',
-        questionnaireId: questionnaire.id,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -943,7 +959,7 @@ export function createRagGraph(services: RagGraphServices) {
 
         if (grounding.ungrounded.links.length > 0) {
           const caveat = buildLinkCaveat(grounding.ungrounded.links);
-          state.streamCallback?.(caveat);
+          services.emitToken(state.traceId, caveat);
           answerOverride = state.answer + caveat;
         }
 
@@ -955,7 +971,7 @@ export function createRagGraph(services: RagGraphServices) {
             grounding.ungrounded.policyNames,
             docs,
           );
-          state.streamCallback?.(appendix.text);
+          services.emitToken(state.traceId, appendix.text);
           answerOverride = (answerOverride ?? state.answer) + appendix.text;
 
           services.recordEvent(state.traceId, {
@@ -1000,7 +1016,7 @@ export function createRagGraph(services: RagGraphServices) {
       retrieval: null,
     });
 
-    state.hitlCallback?.(questionnaire);
+    services.emitHitl(state.traceId, questionnaire);
 
     services.recordEvent(state.traceId, {
       type: 'decision',
@@ -1016,15 +1032,18 @@ export function createRagGraph(services: RagGraphServices) {
       status: 'done',
     });
 
+    const pending: PendingHitl = {
+      originalQuestion: state.question,
+      routeType: 'SEARCH',
+      reason: detection.reason ?? 'unknown',
+      source: 'verify_answer',
+      questionnaireId: questionnaire.id,
+      threadId: state.traceId,
+    };
     return {
       ...(answerOverride ? { answer: answerOverride } : {}),
-      hitlMeta: buildPendingHitlMeta({
-        originalQuestion: state.question,
-        routeType: 'SEARCH',
-        reason: detection.reason ?? 'unknown',
-        source: 'verify_answer',
-        questionnaireId: questionnaire.id,
-      }),
+      hitlMeta: buildPendingHitlMeta(pending),
+      pendingHitl: { questionnaire, pending },
     };
   }
 
@@ -1040,6 +1059,13 @@ export function createRagGraph(services: RagGraphServices) {
     return {};
   }
 
+  function routeAfterVerify(state: GraphStateType): 'save_hitl_message' | 'save_message' {
+    return state.pendingHitl ? 'save_hitl_message' : 'save_message';
+  }
+
+  // save_hitl_message는 save_message와 같은 저장 로직이지만, 저장 후 END가 아니라
+  // await_hitl로 이어져 interrupt()로 그래프를 멈춘다. 보충 답변이 오면
+  // Command({resume})가 await_hitl부터 재개해 pre_route→agent 루프로 되돌아간다.
   return new StateGraph(GraphState)
     .addNode('load_context', loadContext)
     .addNode('request_missing_info', requestMissingInfo)
@@ -1051,11 +1077,13 @@ export function createRagGraph(services: RagGraphServices) {
     .addNode('request_clarification', requestClarification)
     .addNode('verify_answer', verifyAnswer)
     .addNode('save_message', saveMessage)
+    .addNode('save_hitl_message', saveMessage)
+    .addNode('await_hitl', createAwaitHitlNode<GraphStateType>(services))
     .addEdge(START, 'load_context')
     .addEdge('load_context', 'request_missing_info')
     .addConditionalEdges('request_missing_info', routeAfterMissingInfo, {
       pre_route: 'pre_route',
-      save_message: 'save_message',
+      save_hitl_message: 'save_hitl_message',
     })
     .addConditionalEdges('pre_route', routeAfterPreRoute, {
       tools: 'tools',
@@ -1072,8 +1100,13 @@ export function createRagGraph(services: RagGraphServices) {
       request_clarification: 'request_clarification',
     })
     .addEdge('retry_search', 'tools')
-    .addEdge('request_clarification', 'save_message')
-    .addEdge('verify_answer', 'save_message')
+    .addEdge('request_clarification', 'save_hitl_message')
+    .addConditionalEdges('verify_answer', routeAfterVerify, {
+      save_hitl_message: 'save_hitl_message',
+      save_message: 'save_message',
+    })
+    .addEdge('save_hitl_message', 'await_hitl')
+    .addEdge('await_hitl', 'pre_route')
     .addEdge('save_message', END)
-    .compile();
+    .compile({ checkpointer });
 }

@@ -12,10 +12,11 @@ import type { RagRouteType } from './query-analysis.service';
  *  2. 원래 질문 + 보충 정보를 병합해 그래프에 넘기고
  *  3. hitlResumed 플래그로 재클래리피케이션을 억제한다 (ask-at-most-once).
  *
- * LangGraph checkpointer 대신 앱 레벨 재개를 쓰는 이유: 그래프 state에
- * streamCallback/hitlCallback 함수가 있어 체크포인트 직렬화가 불가하고,
- * 중단 깊이가 1이라 "결정된 것(질문·라우트)만 보존하고 검색은 다시 실행"으로
- * 충분하다. 중단 전 검색 결과는 부족 판정을 받은 것이라 보존 가치가 없다.
+ * 재개 경로는 두 가지다:
+ *  - threadId가 있으면(신규): LangGraph checkpointer 스레드를
+ *    Command({resume})로 이어서 실행한다 (hitl-interrupt.ts).
+ *  - threadId가 없으면(구버전 메시지·체크포인트 유실): 원래 질문·라우트만 복원해
+ *    그래프를 처음부터 다시 실행하는 앱 레벨 폴백을 탄다.
  */
 export interface PendingHitl {
   originalQuestion: string;
@@ -24,6 +25,8 @@ export interface PendingHitl {
   source: string;
   questionnaireId?: string;
   missingFields?: string[];
+  /** 중단된 LangGraph 체크포인트 스레드(=해당 턴의 traceId). */
+  threadId?: string;
 }
 
 export interface HitlResumeDecision {
@@ -63,6 +66,7 @@ export function extractPendingHitl(ragContext: unknown): PendingHitl | null {
     source: typeof candidate.source === 'string' ? candidate.source : 'unknown',
     questionnaireId: candidate.questionnaireId,
     missingFields: candidate.missingFields,
+    threadId: typeof candidate.threadId === 'string' ? candidate.threadId : undefined,
   };
 }
 
@@ -219,7 +223,7 @@ export function resolveHitlResume(
   return null;
 }
 
-function mergeQuestion(originalQuestion: string, supplement: string): string {
+export function mergeQuestion(originalQuestion: string, supplement: string): string {
   if (!supplement) return originalQuestion;
   return `${originalQuestion}\n[사용자 보충 정보] ${supplement}`;
 }

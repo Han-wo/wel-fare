@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { traceable } from 'langsmith/traceable';
+import { Command, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { type RagGraphServices } from './rag.graph';
 import {
   buildRagGraphs,
@@ -26,8 +27,12 @@ import {
 import { parseSupplementFacts } from './profile-facts';
 import { ProfileFactsService } from '../profile/profile-facts.service';
 import { TraceFacade } from './trace-facade.service';
+import { QuestionCondenserService } from './question-condenser.service';
 import { StreamingService, type RagStreamEvent } from './streaming.service';
 import { RagThinkingStreamService } from './rag-thinking-stream.service';
+import { RagAnswerStreamService, type AnswerStreamEmitters } from './rag-answer-stream.service';
+import { RAG_CHECKPOINTER } from './rag.tokens';
+import type { HitlResumeValue } from './hitl-interrupt';
 import { HitlSuggestionService } from './hitl-suggestion.service';
 import { ChatMessage } from '../chat/entities/chat-message.entity';
 import { ChatSession } from '../chat/entities/chat-session.entity';
@@ -55,6 +60,10 @@ export class RagOrchestratorService {
     private readonly config: ConfigService,
     private readonly hitlSuggestion: HitlSuggestionService,
     private readonly profileFacts: ProfileFactsService,
+    private readonly questionCondenser: QuestionCondenserService,
+    private readonly answerStream: RagAnswerStreamService,
+    @Inject(RAG_CHECKPOINTER)
+    private readonly checkpointer: BaseCheckpointSaver,
   ) {
     const services: RagGraphServices = {
       queryAnalysis: this.queryAnalysis,
@@ -110,11 +119,13 @@ export class RagOrchestratorService {
       recordEvent: this.traceFacade.addEvent.bind(this.traceFacade),
       recordToolSelection: this.traceFacade.recordToolSelection.bind(this.traceFacade),
       emitThink: this.thinkingStream.emit.bind(this.thinkingStream),
+      emitToken: this.answerStream.emitToken.bind(this.answerStream),
+      emitHitl: this.answerStream.emitHitl.bind(this.answerStream),
       calcAge,
       getSidoName,
     };
 
-    this.graphs = buildRagGraphs(services);
+    this.graphs = buildRagGraphs(services, this.checkpointer);
   }
 
   async *streamAnswer(
@@ -182,7 +193,21 @@ export class RagOrchestratorService {
         }
       }
     } else {
-      routeDecision = await this.queryAnalysis.resolveRouteSmart(question);
+      // 후속 질문("두 번째 거 조건은?")은 대화 맥락 없이 라우팅·검색하면 빗나간다.
+      // 지시어가 감지되면 독립형 질문으로 재작성한 뒤 그 질문으로 진행한다.
+      // 재작성 실패·시간 초과는 원 질문 유지 (기존 동작 대비 후퇴 없음).
+      const history = await this.loadChatHistory(sessionId);
+      const condensed = await this.questionCondenser.condense(question, history);
+      if (condensed) {
+        effectiveQuestion = condensed;
+        this.traceFacade.addEvent(traceId, {
+          type: 'decision',
+          title: '후속 질문 재작성',
+          detail: `대화 맥락을 반영해 독립형 질문으로 재작성했습니다: ${condensed}`,
+          payload: { original: question, condensed },
+        });
+      }
+      routeDecision = await this.queryAnalysis.resolveRouteSmart(effectiveQuestion);
     }
 
     this.traceFacade.setRouteType(traceId, {
@@ -204,12 +229,21 @@ export class RagOrchestratorService {
             }
           });
         };
-        const emitHitl = (payload: HitlQuestionnaire) => {
-          void isClosed().then((closed) => {
-            if (!closed) {
-              void pushHitl(payload);
-            }
-          });
+        const answerEmitters: AnswerStreamEmitters = {
+          onToken: (token: string) => {
+            void isClosed().then((closed) => {
+              if (!closed) {
+                void pushText(token);
+              }
+            });
+          },
+          onHitl: (payload: HitlQuestionnaire) => {
+            void isClosed().then((closed) => {
+              if (!closed) {
+                void pushHitl(payload);
+              }
+            });
+          },
         };
 
         emitThink({
@@ -226,33 +260,57 @@ export class RagOrchestratorService {
         });
 
         this.thinkingStream.register(traceId, emitThink);
+        this.answerStream.register(traceId, answerEmitters);
+
+        const graphConfig = (threadId: string) => ({
+          runName: 'welfare-rag-pipeline',
+          tags: ['welfare-ai', 'rag', 'langgraph'],
+          metadata: { userId, sessionId, traceId, routeType: routeDecision.routeType },
+          configurable: { thread_id: threadId },
+        });
 
         try {
-          const result = await graph.invoke(
-            {
-              question: effectiveQuestion,
-              userId,
-              sessionId,
+          let result: { answer?: unknown } | null = null;
+
+          // 네이티브 재개: 클래리피케이션에서 interrupt()로 멈춘 체크포인트 스레드를
+          // Command({resume})로 이어서 실행한다. await_hitl 노드가 보충 정보를 병합하고
+          // traceId를 이번 턴 것으로 교체한 뒤 검색부터 재개한다.
+          // 체크포인트 유실 등으로 실패하면 아래 전체 재실행 폴백을 탄다.
+          if (resume && pendingHitl?.threadId) {
+            const resumeValue: HitlResumeValue = {
+              supplement: resume.skipped ? '' : resume.supplement,
+              skipped: resume.skipped,
               traceId,
-              messages: [],
-              profile: null,
-              answer: '',
-              hitlResumed: Boolean(resume),
-              streamCallback: (token: string) => {
-                void isClosed().then((closed) => {
-                  if (!closed) {
-                    void pushText(token);
-                  }
-                });
+            };
+            try {
+              result = await graph.invoke(
+                new Command({ resume: resumeValue }),
+                graphConfig(pendingHitl.threadId),
+              );
+            } catch (error) {
+              this.logger.warn(
+                `HITL 네이티브 재개 실패(thread=${pendingHitl.threadId}), 전체 재실행으로 폴백: ${(error as Error).message}`,
+              );
+              result = null;
+            }
+          }
+
+          // 새 질문 턴, 구버전 pending 메타(threadId 없음), 또는 재개 실패 폴백.
+          if (!result) {
+            result = await graph.invoke(
+              {
+                question: effectiveQuestion,
+                userId,
+                sessionId,
+                traceId,
+                messages: [],
+                profile: null,
+                answer: '',
+                hitlResumed: Boolean(resume),
               },
-              hitlCallback: emitHitl,
-            },
-            {
-              runName: 'welfare-rag-pipeline',
-              tags: ['welfare-ai', 'rag', 'langgraph'],
-              metadata: { userId, sessionId, traceId, routeType: routeDecision.routeType },
-            },
-          );
+              graphConfig(traceId),
+            );
+          }
 
           emitThink({
             phase: '답변 정리',
@@ -266,6 +324,7 @@ export class RagOrchestratorService {
           };
         } finally {
           this.thinkingStream.unregister(traceId, emitThink);
+          this.answerStream.unregister(traceId, answerEmitters);
         }
       },
       onSuccess: async ({ answer }) => {
