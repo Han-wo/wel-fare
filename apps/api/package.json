@@ -22,6 +22,7 @@
     "db:seed": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/run-seeds.ts",
     "db:seed:neo4j": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/neo4j.seed.ts",
     "db:seed:qdrant": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/qdrant.seed.ts",
+    "db:backfill:sparse": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/qdrant-sparse-backfill.seed.ts",
     "db:seed:welfare": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/welfare-api.seed.ts",
     "db:seed:local-welfare": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/local-welfare.seed.ts",
     "db:seed:housing": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/rental-housing.seed.ts",
@@ -29,6 +30,8 @@
     "db:seed:housing-anno": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/housing-announcement.seed.ts",
     "db:seed:admin": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/admin.seed.ts",
     "db:seed:youth-policy": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/youth-policy.seed.ts",
+    "db:seed:gov24": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/gov24.seed.ts",
+    "db:seed:static-docs": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/static-docs.seed.ts",
     "db:seed:applyhome": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome.seed.ts",
     "db:seed:applyhome-cmpet": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome-cmpet.seed.ts",
     "db:seed:applyhome-stat": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome-stat.seed.ts"

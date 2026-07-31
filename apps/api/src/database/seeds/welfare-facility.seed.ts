@@ -16,6 +16,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 
 // ── 설정 ─────────────────────────────────────────────────
 const API_KEY = getRequiredAnyEnv([
@@ -132,7 +133,7 @@ function prepareFacilities(items: FacilityItem[]): PreparedFacility[] {
 async function upsertToQdrant(facilities: PreparedFacility[], embeddings: number[][]): Promise<void> {
   const points = facilities.map(({ item: f, policyId, content, syncHash }, i) => ({
     id: facilityPointId(f.fcltCd),
-    vector: embeddings[i],
+    vector: buildQdrantVectors(embeddings[i], `${f.fcltKindNm} - ${f.fcltNm}\n${content}`),
     payload: {
       policyId,
       policyName: `${f.fcltKindNm} - ${f.fcltNm}`,

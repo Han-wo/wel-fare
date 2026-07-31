@@ -19,10 +19,20 @@ import {
 } from './retrieval-helpers';
 import type { UserProfile as UserProfileType } from '@welfare-ai/shared-types';
 import { RagCacheService } from './rag-cache.service';
+import { RerankerService } from './reranker.service';
+import {
+  encodeSparseVector,
+  SPARSE_VECTOR_NAME,
+} from '../../common/sparse-vector';
 
 const EMBEDDING_CACHE_TTL_SECONDS = 60 * 60 * 24;
 const RETRIEVAL_CACHE_TTL_SECONDS = 60 * 10;
 const FAST_MOVING_CACHE_TTL_SECONDS = 60 * 5;
+
+// 리랭킹이 실패했을 때 점수가 누락된 문서에 주는 중립 점수. 융합(RRF) 점수는
+// 랭크 기반(0.5~1.0)이라 리랭크 점수(관련성 0~1)와 섞으면 누락 문서가 부당하게
+// 상위로 올라가므로, "주제는 겹치나 확신 없음" 대역의 상수로 고정한다.
+const RERANK_MISSING_SCORE = 0.25;
 
 // 일반 복지 검색: 프로필 온톨로지를 하드 필터(must)로 쓰면 프로필과 안 맞는
 // 특정 정책(예: 36세 유저의 "기초연금")이 코퍼스에 있어도 후보군에서 원천 배제된다.
@@ -41,6 +51,10 @@ type QdrantHit = {
   payload?: Record<string, unknown> | null;
 };
 
+type QdrantFilter = NonNullable<
+  NonNullable<Parameters<QdrantClient['search']>[1]>['filter']
+>;
+
 @Injectable()
 export class VectorRetrievalService {
   private readonly logger = new Logger(VectorRetrievalService.name);
@@ -48,11 +62,15 @@ export class VectorRetrievalService {
   private readonly qdrantClient: QdrantClient;
   private readonly collectionName: string;
 
+  private readonly hybridEnabled: boolean;
+
   constructor(
     private readonly traceFacade: TraceFacade,
     private readonly config: ConfigService,
     private readonly ragCache: RagCacheService,
+    private readonly reranker: RerankerService,
   ) {
+    this.hybridEnabled = this.config.get('RAG_HYBRID_SEARCH', 'on') !== 'off';
     this.embeddings = new OpenAIEmbeddings({
       model: this.config.get('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
       openAIApiKey: this.config.get('OPENAI_API_KEY'),
@@ -79,39 +97,61 @@ export class VectorRetrievalService {
       ttlSeconds: RETRIEVAL_CACHE_TTL_SECONDS,
       dataVersionScope: 'welfare',
       loader: async () => {
-        const queryVector = await this.embedQueryCached(normalizedQuestion, 'general-welfare');
-
         const sourceFilter = {
           should: [
             { key: 'source', match: { value: 'bokjiro' } },
             { key: 'source', match: { value: 'local_bokjiro' } },
+            { key: 'source', match: { value: 'gov24' } },
+            { key: 'source', match: { value: 'static_doc' } },
           ],
         };
 
-        // (1) recall: 프로필과 무관하게 질문에 직접 부합하는 정책을 코퍼스 전체에서.
+        // (1) recall: 프로필과 무관하게 질문에 직접 부합하는 정책을 코퍼스 전체에서
+        //     dense+sparse 하이브리드로 찾는다 (정책명 렉시컬 매치 포함).
         // (2) personalization: 온톨로지 후보를 같은 쿼리 벡터로 랭킹(하드 임계값 없음).
         const [semanticHits, ontologyHits] = await Promise.all([
-          this.qdrantClient.search(this.collectionName, {
-            vector: queryVector,
+          this.hybridSearch({
+            text: normalizedQuestion,
+            namespace: 'general-welfare',
             limit: GENERAL_WELFARE_SEMANTIC_LIMIT,
             filter: sourceFilter,
-            with_payload: true,
-            score_threshold: GENERAL_WELFARE_SEMANTIC_THRESHOLD,
+            denseScoreThreshold: GENERAL_WELFARE_SEMANTIC_THRESHOLD,
           }),
           normalizedPolicyIds.length > 0
-            ? this.qdrantClient.search(this.collectionName, {
-                vector: queryVector,
-                limit: GENERAL_WELFARE_ONTOLOGY_LIMIT,
-                filter: { must: [{ key: 'policyId', match: { any: normalizedPolicyIds } }] },
-                with_payload: true,
-              })
+            ? this.embedQueryCached(normalizedQuestion, 'general-welfare').then(
+                (queryVector) =>
+                  this.qdrantClient.search(this.collectionName, {
+                    vector: queryVector,
+                    limit: GENERAL_WELFARE_ONTOLOGY_LIMIT,
+                    filter: { must: [{ key: 'policyId', match: { any: normalizedPolicyIds } }] },
+                    with_payload: true,
+                  }),
+              )
             : Promise.resolve([] as QdrantHit[]),
         ]);
 
-        const merged = this.mergeWithOntologyBoost(semanticHits, ontologyHits);
+        // 리랭크 성공 시 두 arm의 점수를 보정 관련성(0~1)으로 교체한 뒤
+        // 기존 union+boost 병합을 그대로 태운다. 실패 시 융합/코사인 점수 유지.
+        const uniqueHits = [
+          ...new Map(
+            [...semanticHits, ...ontologyHits].map((hit) => [String(hit.id), hit]),
+          ).values(),
+        ];
+        const rerankScores = await this.rerankScores(normalizedQuestion, uniqueHits);
+        const rescore = (hit: QdrantHit): QdrantHit =>
+          rerankScores
+            ? { ...hit, score: rerankScores.get(String(hit.id)) ?? RERANK_MISSING_SCORE }
+            : hit;
+
+        const merged = this.mergeWithOntologyBoost(
+          semanticHits.map(rescore),
+          ontologyHits.map(rescore),
+        );
 
         this.traceVectorSearch(traceId, 'Qdrant 일반 복지 검색', question, merged, {
           mode: 'union+boost',
+          hybrid: this.hybridEnabled,
+          reranked: Boolean(rerankScores),
           semanticHits: semanticHits.length,
           ontologyCandidates: normalizedPolicyIds.length,
           ontologyHits: ontologyHits.length,
@@ -143,14 +183,14 @@ export class VectorRetrievalService {
       ttlSeconds: RETRIEVAL_CACHE_TTL_SECONDS,
       dataVersionScope: 'youth',
       loader: async () => {
-        const queryVector = await this.embedQueryCached(normalizedQuestion, 'youth-policy');
-        const searchResult = await this.qdrantClient.search(this.collectionName, {
-          vector: queryVector,
-          limit: 6,
+        const candidates = await this.hybridSearch({
+          text: normalizedQuestion,
+          namespace: 'youth-policy',
+          limit: 12,
           filter: { must: [{ key: 'source', match: { value: 'youth_center' } }] },
-          with_payload: true,
-          score_threshold: 0.35,
+          denseScoreThreshold: 0.35,
         });
+        const searchResult = await this.rerankHits(normalizedQuestion, candidates, 6);
 
         this.traceVectorSearch(traceId, 'Qdrant 청년정책 검색', question, searchResult, {
           must: [{ key: 'source', match: { value: 'youth_center' } }],
@@ -186,16 +226,13 @@ export class VectorRetrievalService {
       ttlSeconds: RETRIEVAL_CACHE_TTL_SECONDS,
       dataVersionScope: 'policy',
       loader: async () => {
-        const queryVector = await this.embedQueryCached(
-          normalizedPolicyName,
-          'policy-eligibility',
-        );
-        const searchResult = await this.qdrantClient.search(this.collectionName, {
-          vector: queryVector,
-          limit: 3,
-          with_payload: true,
-          score_threshold: 0.5,
+        const candidates = await this.hybridSearch({
+          text: normalizedPolicyName,
+          namespace: 'policy-eligibility',
+          limit: 8,
+          denseScoreThreshold: 0.5,
         });
+        const searchResult = await this.rerankHits(normalizedPolicyName, candidates, 3);
 
         this.traceVectorSearch(traceId, '정책명 기반 적격성 검색', policyName, searchResult);
 
@@ -226,13 +263,10 @@ export class VectorRetrievalService {
       ttlSeconds: FAST_MOVING_CACHE_TTL_SECONDS,
       dataVersionScope: 'housing_subscription',
       loader: async () => {
-        const queryVector = await this.embedQueryCached(
-          normalizedQuestion,
-          'housing-announcements',
-        );
-        const qdrantRes = await this.qdrantClient.search(this.collectionName, {
-          vector: queryVector,
-          limit: 6,
+        const candidates = await this.hybridSearch({
+          text: normalizedQuestion,
+          namespace: 'housing-announcements',
+          limit: 12,
           filter: {
             should: [
               { key: 'source', match: { value: 'applyhome' } },
@@ -241,9 +275,9 @@ export class VectorRetrievalService {
               { key: 'source', match: { value: 'applyhome_stat' } },
             ],
           },
-          with_payload: true,
-          score_threshold: 0.35,
+          denseScoreThreshold: 0.35,
         });
+        const qdrantRes = await this.rerankHits(normalizedQuestion, candidates, 6);
 
         this.traceVectorSearch(traceId, 'Qdrant 청약 공고 검색', question, qdrantRes, {
           should: [
@@ -273,28 +307,21 @@ export class VectorRetrievalService {
       dataVersionScope: 'rental_support',
       loader: async () => {
         try {
-          const queryVector = await this.embedQueryCached(
-            normalizedQuestion,
-            'rental-support',
-          );
-          const [lhResults, bokjiroResults] = await Promise.all([
-            this.qdrantClient.search(this.collectionName, {
-              vector: queryVector,
-              limit: 5,
-              filter: { must: [{ key: 'source', match: { value: 'lh_housing' } }] },
-              with_payload: true,
-              score_threshold: 0.35,
-            }),
-            this.qdrantClient.search(this.collectionName, {
-              vector: queryVector,
-              limit: 4,
-              filter: { must: [{ key: 'source', match: { value: 'bokjiro' } }] },
-              with_payload: true,
-              score_threshold: 0.4,
-            }),
-          ]);
-
-          const merged = [...lhResults, ...bokjiroResults];
+          // 기존 소스별 2회 dense 검색(lh 5 + bokjiro 4)을 소스 통합 하이브리드
+          // 1회로 합친다. 소스 배분은 리랭커가 관련성으로 정렬하며 자연히 정해진다.
+          const candidates = await this.hybridSearch({
+            text: normalizedQuestion,
+            namespace: 'rental-support',
+            limit: 18,
+            filter: {
+              should: [
+                { key: 'source', match: { value: 'lh_housing' } },
+                { key: 'source', match: { value: 'bokjiro' } },
+              ],
+            },
+            denseScoreThreshold: 0.35,
+          });
+          const merged = await this.rerankHits(normalizedQuestion, candidates, 9);
           this.traceVectorSearch(traceId, 'Qdrant 주거 지원 검색', question, merged, {
             sources: ['lh_housing', 'bokjiro'],
           });
@@ -326,17 +353,14 @@ export class VectorRetrievalService {
       ttlSeconds: RETRIEVAL_CACHE_TTL_SECONDS,
       dataVersionScope: 'facility',
       loader: async () => {
-        const queryVector = await this.embedQueryCached(
-          normalizedQuery,
-          'welfare-facility',
-        );
-        const searchResult = await this.qdrantClient.search(this.collectionName, {
-          vector: queryVector,
-          limit: 8,
+        const candidates = await this.hybridSearch({
+          text: normalizedQuery,
+          namespace: 'welfare-facility',
+          limit: 16,
           filter: { must: [{ key: 'source', match: { value: 'welfare_facility' } }] },
-          with_payload: true,
-          score_threshold: 0.35,
+          denseScoreThreshold: 0.35,
         });
+        const searchResult = await this.rerankHits(normalizedQuery, candidates, 8);
 
         this.traceVectorSearch(traceId, 'Qdrant 복지시설 검색', query, searchResult, {
           must: [{ key: 'source', match: { value: 'welfare_facility' } }],
@@ -400,6 +424,115 @@ export class VectorRetrievalService {
     });
 
     return value;
+  }
+
+  /**
+   * 하이브리드 검색: dense(의미) + sparse(렉시컬 BM25형) 프리페치를 RRF로 융합한다.
+   * 정책명 같은 렉시컬 엔티티 검색 미스를 sparse arm이 직접 흡수한다.
+   *
+   * 폴백 사다리: sparse 인코딩 불가/기능 off → dense 단독. query API 실패
+   * (컬렉션에 text_sparse 미백필 등) → dense 단독. 기존 동작보다 나빠지지 않는다.
+   *
+   * 주의: 융합 점수는 랭크 기반이라 코사인 유사도와 절대값 비교가 불가하다.
+   * 최종 점수 보정은 rerankHits가 담당한다.
+   */
+  private async hybridSearch(params: {
+    text: string;
+    namespace: string;
+    limit: number;
+    filter?: QdrantFilter;
+    denseScoreThreshold?: number;
+  }): Promise<QdrantHit[]> {
+    const queryVector = await this.embedQueryCached(params.text, params.namespace);
+
+    const denseOnly = () =>
+      this.qdrantClient.search(this.collectionName, {
+        vector: queryVector,
+        limit: params.limit,
+        filter: params.filter,
+        with_payload: true,
+        ...(params.denseScoreThreshold !== undefined
+          ? { score_threshold: params.denseScoreThreshold }
+          : {}),
+      });
+
+    const sparse = this.hybridEnabled ? encodeSparseVector(params.text) : null;
+    if (!sparse) {
+      return denseOnly();
+    }
+
+    const prefetchLimit = Math.max(params.limit, 20);
+    try {
+      const response = await this.qdrantClient.query(this.collectionName, {
+        prefetch: [
+          {
+            query: queryVector,
+            using: '',
+            limit: prefetchLimit,
+            filter: params.filter,
+            ...(params.denseScoreThreshold !== undefined
+              ? { score_threshold: params.denseScoreThreshold }
+              : {}),
+          },
+          {
+            query: sparse,
+            using: SPARSE_VECTOR_NAME,
+            limit: prefetchLimit,
+            filter: params.filter,
+          },
+        ],
+        query: { fusion: 'rrf' },
+        limit: params.limit,
+        with_payload: true,
+      });
+      return response.points as QdrantHit[];
+    } catch (error) {
+      this.logger.warn(
+        `하이브리드 검색 실패 — dense 단독 폴백 [${params.namespace}]: ${(error as Error).message}`,
+      );
+      return denseOnly();
+    }
+  }
+
+  /**
+   * LLM 리랭커로 후보를 재채점해 상위 finalLimit개를 돌려준다.
+   * 리랭킹 불가·실패 시 기존 순위 그대로 자른다 (기존 동작 대비 후퇴 없음).
+   * 성공 시 hit.score가 보정된 관련성 점수(0~1)로 교체되어 하류의
+   * 신뢰도 게이트(isRetrievalInsufficient)와 trace 표기에 쓰인다.
+   */
+  private async rerankHits(
+    question: string,
+    hits: QdrantHit[],
+    finalLimit: number,
+  ): Promise<QdrantHit[]> {
+    const scores = await this.rerankScores(question, hits);
+    if (!scores) return hits.slice(0, finalLimit);
+
+    return hits
+      .map((hit) => ({
+        ...hit,
+        score: scores.get(String(hit.id)) ?? RERANK_MISSING_SCORE,
+      }))
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .slice(0, finalLimit);
+  }
+
+  private async rerankScores(
+    question: string,
+    hits: QdrantHit[],
+  ): Promise<Map<string, number> | null> {
+    if (hits.length === 0) return null;
+    return this.reranker.rerank(
+      question,
+      hits.map((hit) => {
+        const payload = (hit.payload ?? {}) as Record<string, unknown>;
+        return {
+          key: String(hit.id),
+          title: typeof payload.policyName === 'string' ? payload.policyName : null,
+          content: typeof payload.content === 'string' ? payload.content : null,
+        };
+      }),
+    );
   }
 
   // 의미검색 결과와 온톨로지 후보를 합치고, 온톨로지에 속한 정책은 점수를

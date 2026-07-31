@@ -17,6 +17,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 import {
   closePolicySyncDataSource,
   syncPoliciesToPostgres,
@@ -292,7 +293,7 @@ async function upsertToQdrant(policies: PreparedPolicy[], embeddings: number[][]
 
   const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
     id: servIdToPointId(p.servId),
-    vector: embeddings[i],
+    vector: buildQdrantVectors(embeddings[i], `${p.servNm}\n${content}`),
     payload: {
       policyId,
       policyName: p.servNm,

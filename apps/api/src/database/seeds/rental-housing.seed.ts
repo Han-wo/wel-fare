@@ -15,6 +15,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 
 // ── 설정 ─────────────────────────────────────────────────
 const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
@@ -489,7 +490,7 @@ async function upsertToQdrant(
 ): Promise<void> {
   const points = complexes.map(({ item: c, policyId, content, syncHash }, i) => ({
     id: itemId(c),
-    vector: embeddings[i],
+    vector: buildQdrantVectors(embeddings[i], `공공임대주택 - ${c.signguNm}\n${content}`),
     payload: {
       policyId,
       policyName: `공공임대주택 - ${c.signguNm}`,

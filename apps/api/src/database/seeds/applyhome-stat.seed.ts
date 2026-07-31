@@ -21,6 +21,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 
 const API_KEY = getRequiredEnv('PUBLIC_DATA_API_KEY');
 const BASE_URL = 'https://api.odcloud.kr/api/ApplyhomeStatSvc/v1';
@@ -311,7 +312,7 @@ async function upsertQdrant(groups: PreparedStatGroup[]): Promise<void> {
     const embeddings = await embedTexts(batch.map((g) => g.content));
     const points = batch.map(({ item: g, policyId, content, syncHash }, idx) => ({
       id: pointId(policyId),
-      vector: embeddings[idx],
+      vector: buildQdrantVectors(embeddings[idx], `${g.label}\n${content}`),
       payload: {
         policyId,
         policyName: g.label,

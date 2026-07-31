@@ -19,6 +19,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 import {
   closePolicySyncDataSource,
   syncPoliciesToPostgres,
@@ -386,7 +387,7 @@ async function upsertToQdrant(
     const ageInfo = buildAgeInfo(p);
     return {
       id: plcyNoToPointId(p.plcyNo),
-      vector: embeddings[i],
+      vector: buildQdrantVectors(embeddings[i], `${p.plcyNm}\n${content}`),
       payload: {
         policyId,
         policyName: p.plcyNm,

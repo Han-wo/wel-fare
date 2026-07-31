@@ -33,6 +33,7 @@ import { RagCacheService } from './rag-cache.service';
 import { ROUTE_FALLBACK_CLASSIFIER } from './route-fallback';
 import { RouteLlmFallbackService } from './route-llm-fallback.service';
 import { QuestionCondenserService } from './question-condenser.service';
+import { RerankerService } from './reranker.service';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { QuestionCondenserService } from './question-condenser.service';
     RagThinkingStreamService,
     RagAnswerStreamService,
     RagCacheService,
+    RerankerService,
     VectorRetrievalService,
     PolicyGraphService,
     HousingGraphService,

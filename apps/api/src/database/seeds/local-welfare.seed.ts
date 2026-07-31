@@ -16,6 +16,7 @@ import {
   makeSyncHash,
   type PreparedSyncItem,
 } from './incremental-sync.util';
+import { buildQdrantVectors } from '../../common/sparse-vector';
 import { getSidoCode } from '@welfare-ai/shared-utils';
 import {
   closePolicySyncDataSource,
@@ -296,7 +297,7 @@ async function upsertToQdrant(
 ): Promise<void> {
   const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
     id: servIdToNum(p.servId),
-    vector: embeddings[i],
+    vector: buildQdrantVectors(embeddings[i], `${p.servNm}\n${content}`),
     payload: {
       policyId,
       policyName: p.servNm,
