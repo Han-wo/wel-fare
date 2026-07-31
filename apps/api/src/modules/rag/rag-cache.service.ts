@@ -7,8 +7,8 @@ import { Repository } from 'typeorm';
 import { DataSyncLog } from '../data-sync/entities/data-sync-log.entity';
 
 const DATA_VERSION_SCOPE_SEEDS = {
-  welfare: ['welfare', 'local-welfare'],
-  policy: ['welfare', 'local-welfare', 'youth-policy'],
+  welfare: ['welfare', 'local-welfare', 'gov24', 'static-docs'],
+  policy: ['welfare', 'local-welfare', 'youth-policy', 'gov24', 'static-docs'],
   youth: ['youth-policy'],
   housing_subscription: [
     'housing-announcement',
@@ -21,6 +21,8 @@ const DATA_VERSION_SCOPE_SEEDS = {
   all: [
     'welfare',
     'local-welfare',
+    'gov24',
+    'static-docs',
     'youth-policy',
     'rental-housing',
     'facility',

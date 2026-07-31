@@ -18,6 +18,8 @@ import {
 const SYNC_SEEDS = [
   { key: 'welfare', name: '중앙부처 복지서비스', script: 'welfare-api.seed.ts' },
   { key: 'local-welfare', name: '지자체 복지서비스', script: 'local-welfare.seed.ts' },
+  { key: 'gov24', name: '보조금24 공공서비스', script: 'gov24.seed.ts' },
+  { key: 'static-docs', name: '정적 제도 문서', script: 'static-docs.seed.ts' },
   { key: 'youth-policy', name: '청년정책', script: 'youth-policy.seed.ts' },
   { key: 'rental-housing', name: '공공임대주택 단지', script: 'rental-housing.seed.ts' },
   { key: 'facility', name: '사회복지시설', script: 'welfare-facility.seed.ts' },
@@ -464,7 +466,7 @@ export class DataSyncService {
           MAX(COALESCE("applicationEnd", "applicationStart")) AS "latestDataDate",
           COUNT(*)::int AS "recordCount"
         FROM policies
-        WHERE source IN ('bokjiro', 'local_bokjiro', 'youth_center')
+        WHERE source IN ('bokjiro', 'local_bokjiro', 'youth_center', 'gov24', 'static_doc')
         GROUP BY source
       `),
       this.getGraphFreshnessRows(),
@@ -1261,11 +1263,19 @@ export class DataSyncService {
     if (source === 'bokjiro') return 'welfare';
     if (source === 'local_bokjiro') return 'local-welfare';
     if (source === 'youth_center') return 'youth-policy';
+    if (source === 'gov24') return 'gov24';
+    if (source === 'static_doc') return 'static-docs';
     return source;
   }
 
   private defaultStorageForSeed(seedKey: string): DataFreshnessSnapshot['storage'] {
-    if (seedKey === 'welfare' || seedKey === 'local-welfare' || seedKey === 'youth-policy') {
+    if (
+      seedKey === 'welfare' ||
+      seedKey === 'local-welfare' ||
+      seedKey === 'youth-policy' ||
+      seedKey === 'gov24' ||
+      seedKey === 'static-docs'
+    ) {
       return 'postgres';
     }
     if (seedKey === 'applyhome-cmpet' || seedKey === 'applyhome-stat') {
