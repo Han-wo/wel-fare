@@ -129,6 +129,25 @@ services:
       YOUTH_CENTER_API_KEY: ${YOUTH_CENTER_API_KEY:-}
       SEOUL_OPEN_API_KEY: ${SEOUL_OPEN_API_KEY:-}
       GYEONGGI_API_KEY: ${GYEONGGI_API_KEY:-}
+      # 보조금24는 공공데이터포털에서 데이터셋별로 활용신청을 따로 받는다.
+      # PUBLIC_DATA_API_KEY로 폴백하면 권한이 없어 -401이 나므로 별도 키를 받는다.
+      GOV24_API_KEY: ${GOV24_API_KEY:-}
+      # 웹푸시(VAPID). 미설정이면 푸시만 꺼지고 인앱 알림은 정상 동작한다.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@welfare.local}
+      # ── RAG 튜닝 노브 ────────────────────────────────────────────────
+      # 전부 코드에 기본값이 있어 비워둬도 동작한다. 값을 바꾸려면 여기를
+      # 거쳐야 컨테이너까지 전달된다(.env.prod에만 쓰면 주입되지 않음).
+      RAG_AGENT_REASONING_EFFORT: ${RAG_AGENT_REASONING_EFFORT:-}
+      RAG_ANSWER_REASONING_EFFORT: ${RAG_ANSWER_REASONING_EFFORT:-}
+      RAG_HYBRID_SEARCH: ${RAG_HYBRID_SEARCH:-}
+      RAG_RERANK_ENABLED: ${RAG_RERANK_ENABLED:-}
+      RAG_RERANK_MODEL: ${RAG_RERANK_MODEL:-}
+      RAG_RERANK_TIMEOUT_MS: ${RAG_RERANK_TIMEOUT_MS:-}
+      RAG_CONDENSE_MODEL: ${RAG_CONDENSE_MODEL:-}
+      RAG_CONDENSE_TIMEOUT_MS: ${RAG_CONDENSE_TIMEOUT_MS:-}
+      RAG_ROUTE_FALLBACK_TIMEOUT_MS: ${RAG_ROUTE_FALLBACK_TIMEOUT_MS:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       OPENAI_ROUTER_MODEL: ${OPENAI_ROUTER_MODEL:-gpt-5-nano}
