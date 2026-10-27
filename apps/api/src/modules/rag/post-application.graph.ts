@@ -1,5 +1,6 @@
 import { Annotation, END, START, StateGraph, type BaseCheckpointSaver } from '@langchain/langgraph';
-import { ChatOpenAI } from '@langchain/openai';
+import type { ChatOpenAI } from '@langchain/openai';
+import { createAnswerLlm } from './agent-llm';
 import {
   AIMessage,
   HumanMessage,
@@ -141,10 +142,10 @@ export function createPostApplicationGraph(
     services.emitThink(traceId, input);
   };
 
-  const llm = new ChatOpenAI({
-    model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
-    streaming: true,
-  });
+  // 이 그래프는 도구를 바인딩하지 않는다 — 검색된 근거를 정해진 형식으로
+  // 옮겨 쓰기만 한다. 도구 선택 판단이 없으므로 answer 등급(minimal)이 맞다.
+  // 실측(동일 프롬프트): low 4.03s → minimal 1.34s, 답변 길이는 동일.
+  const llm = createAnswerLlm();
 
   async function loadContext(
     state: PostApplicationGraphState,

@@ -136,6 +136,14 @@ export class RagOrchestratorService {
   ): AsyncGenerator<RagStreamEvent> {
     await this.ensureSessionOwnership(userId, sessionId);
 
+    // 이번 턴의 히스토리를 "사용자 메시지 저장 전" 시점으로 한 번만 읽어 고정한다.
+    //  (1) 후속질문 재작성과 그래프 loadContext가 같은 쿼리를 매 턴 두 번 날리던 것을 없앤다.
+    //  (2) onStart(saveUserMessage)가 그래프 실행보다 먼저라, 캐시가 없으면 loadContext가
+    //      방금 저장된 현재 질문까지 히스토리로 읽고 거기에 HumanMessage(question)을 또
+    //      붙여 프롬프트에 같은 질문이 두 번 들어갔다.
+    this.historyCache.delete(sessionId);
+    await this.loadChatHistory(sessionId);
+
     const traceId = this.traceFacade.startTrace({
       sessionId,
       userId,
@@ -270,7 +278,9 @@ export class RagOrchestratorService {
         });
 
         try {
-          let result: { answer?: unknown } | null = null;
+          let result: { answer?: unknown; pendingHitl?: unknown } | null = null;
+          // 이번 턴이 실제로 쓴 체크포인트 스레드. 턴이 HITL 대기 없이 끝나면 폐기한다.
+          let usedThreadId: string = traceId;
 
           // 네이티브 재개: 클래리피케이션에서 interrupt()로 멈춘 체크포인트 스레드를
           // Command({resume})로 이어서 실행한다. await_hitl 노드가 보충 정보를 병합하고
@@ -287,6 +297,7 @@ export class RagOrchestratorService {
                 new Command({ resume: resumeValue }),
                 graphConfig(pendingHitl.threadId),
               );
+              usedThreadId = pendingHitl.threadId;
             } catch (error) {
               this.logger.warn(
                 `HITL 네이티브 재개 실패(thread=${pendingHitl.threadId}), 전체 재실행으로 폴백: ${(error as Error).message}`,
@@ -310,6 +321,18 @@ export class RagOrchestratorService {
               },
               graphConfig(traceId),
             );
+            usedThreadId = traceId;
+            // 재개 실패로 폴백했다면 원래 스레드는 더 이상 재개 대상이 아니다.
+            if (resume && pendingHitl?.threadId) {
+              await this.pruneCheckpointThread(pendingHitl.threadId);
+            }
+          }
+
+          // 체크포인트는 HITL interrupt 재개에만 쓰인다. 대기 상태로 끝나지 않은 턴의
+          // 스레드는 다시 열릴 일이 없으므로 즉시 지운다 — 안 그러면 턴마다 체크포인트
+          // 10여 개 + blob이 영구 누적된다(재개는 직전 턴 스레드 하나만 참조).
+          if (!result?.pendingHitl) {
+            await this.pruneCheckpointThread(usedThreadId);
           }
 
           emitThink({
@@ -328,6 +351,7 @@ export class RagOrchestratorService {
         }
       },
       onSuccess: async ({ answer }) => {
+        this.historyCache.delete(sessionId);
         if (answer) {
           this.traceFacade.recordAnswer(traceId, answer);
         }
@@ -337,6 +361,7 @@ export class RagOrchestratorService {
         });
       },
       onError: async (error) => {
+        this.historyCache.delete(sessionId);
         this.logger.error('RAG 파이프라인 오류:', error);
         this.traceFacade.recordError(traceId, error.message);
         await this.traceFacade.finalizeTrace(traceId, {
@@ -345,11 +370,25 @@ export class RagOrchestratorService {
         });
       },
       onAbort: async () => {
+        this.historyCache.delete(sessionId);
         await this.traceFacade.finalizeTrace(traceId, {
           status: 'ABORTED',
         });
       },
     });
+  }
+
+  // 체크포인터(PostgresSaver 0.0.5)에 스레드 삭제 API가 없어 직접 지운다.
+  // 정리 실패가 답변에 영향을 주면 안 되므로 로그만 남기고 삼킨다.
+  private async pruneCheckpointThread(threadId: string) {
+    try {
+      // pg는 파라미터가 있으면 확장 질의 프로토콜을 써서 한 번에 한 구문만 보낼 수 있다.
+      for (const table of ['checkpoint_writes', 'checkpoint_blobs', 'checkpoints']) {
+        await this.sessionRepo.query(`DELETE FROM ${table} WHERE thread_id = $1`, [threadId]);
+      }
+    } catch (error) {
+      this.logger.warn(`체크포인트 정리 실패(thread=${threadId}): ${(error as Error).message}`);
+    }
   }
 
   private getGraphForRoute(routeType: RagRouteType): InvokableRagGraph {
@@ -368,7 +407,21 @@ export class RagOrchestratorService {
     return extractPendingHitl(last.ragContext);
   }
 
-  private async loadChatHistory(sessionId: string) {
+  // 한 턴 안에서 두 번 불린다 — 후속질문 재작성(streamAnswer)과 그래프 loadContext.
+  // 같은 턴이면 같은 결과이므로 요청 단위로 한 번만 조회한다. 저장된 메시지는
+  // 턴 시작 시점에 확정되고(사용자 메시지는 그 전에 저장됨) 턴 중간에 바뀌지 않는다.
+  private readonly historyCache = new Map<string, Promise<Array<{ role: string; content: string }>>>();
+
+  private loadChatHistory(sessionId: string) {
+    const cached = this.historyCache.get(sessionId);
+    if (cached) return cached;
+
+    const pending = this.fetchChatHistory(sessionId);
+    this.historyCache.set(sessionId, pending);
+    return pending;
+  }
+
+  private async fetchChatHistory(sessionId: string) {
     const recent = await this.messageRepo.find({
       where: { sessionId },
       order: { createdAt: 'DESC' },

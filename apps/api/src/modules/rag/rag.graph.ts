@@ -1,7 +1,7 @@
 import { StateGraph, END, START, Annotation, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { ToolNode } from '@langchain/langgraph/prebuilt';
-import { ChatOpenAI } from '@langchain/openai';
 import { tool } from '@langchain/core/tools';
+import { createAgentLlm, createAnswerLlm } from './agent-llm';
 import { z } from 'zod';
 import {
   SystemMessage,
@@ -101,7 +101,11 @@ export interface RagGraphServices {
   >;
   getProfile: (userId: string) => Promise<UserProfile | null>;
   searchWelfare: (question: string, userId: string, traceId?: string) => Promise<RetrievalResult>;
-  searchYouthPolicies: (question: string, traceId?: string) => Promise<RetrievalResult>;
+  searchYouthPolicies: (
+    question: string,
+    userId: string,
+    traceId?: string,
+  ) => Promise<RetrievalResult>;
   searchPolicyEligibility: (
     policyName: string,
     userId: string,
@@ -214,10 +218,10 @@ export function createRagGraph(
     services.emitThink(traceId, input);
   };
 
-  const llm = new ChatOpenAI({
-    model: process.env.OPENAI_CHAT_MODEL ?? 'gpt-5-mini',
-    streaming: true,
-  });
+  // 도구 선택이 섞인 ReAct 호출과, 근거를 옮겨 쓰기만 하는 호출은 필요한
+  // reasoning 양이 다르다. 후자를 낮춰 답변 TTFB를 줄인다(agent-llm 참고).
+  const agentLlm = createAgentLlm();
+  const answerLlm = createAnswerLlm();
   // traceId는 LLM에 노출하지 않는다. 도구 호출 시 RunnableConfig.metadata로 전달되며,
   // orchestrator의 graph.invoke()가 이미 metadata.traceId를 채워 모든 노드/도구에 전파한다.
   const extractTraceId = (config?: RunnableConfig): string | null => {
@@ -259,7 +263,7 @@ export function createRagGraph(
 
   const searchYouthPolicy = tool(
     async (
-      { question }: { question: string },
+      { question, userId }: { question: string; userId: string },
       config?: RunnableConfig,
     ) => {
       const traceId = extractTraceId(config);
@@ -269,7 +273,7 @@ export function createRagGraph(
         node: 'search_youth_policy',
         status: 'active',
       });
-      const result = await services.searchYouthPolicies(question, traceId ?? undefined);
+      const result = await services.searchYouthPolicies(question, userId, traceId ?? undefined);
       emitThink(traceId, {
         phase: '청년정책 검색',
         content: `${result.summary} 청년정책 후보를 정리했습니다.`,
@@ -284,6 +288,7 @@ export function createRagGraph(
         '청년(만 19~34세) 전용 정책을 검색합니다. 청년수당, 청년월세, 청년도약계좌, 청년 취업·창업 지원 등을 찾을 때 사용합니다. 예: "청년 정책 뭐 있어?". 청년+청약처럼 주거 공고와 겹치는 질문이면 search_housing_subscription과 함께 호출합니다.',
       schema: z.object({
         question: z.string(),
+        userId: z.string(),
       }),
     },
   );
@@ -468,7 +473,7 @@ export function createRagGraph(
     getUpcomingDeadlines,
   ];
   const toolNode = new ToolNode<GraphStateType>(tools);
-  const llmWithTools = llm.bindTools(tools);
+  const llmWithTools = agentLlm.bindTools(tools);
 
   function preRoute(state: GraphStateType): Partial<GraphStateType> {
     emitThink(state.traceId, {
@@ -695,7 +700,7 @@ export function createRagGraph(
       });
     }
 
-    const model = budgetExhausted ? llm : llmWithTools;
+    const model = budgetExhausted ? answerLlm : llmWithTools;
     const input = budgetExhausted
       ? [...state.messages, new HumanMessage(BUDGET_EXHAUSTED_INSTRUCTION)]
       : state.messages;
@@ -750,15 +755,19 @@ export function createRagGraph(
       status: 'done',
     });
 
+    // 도구를 부르는 턴의 텍스트는 답변이 아니라 preamble("먼저 검색해볼게요")이다.
+    // 이걸 answer에 실으면 shouldContinue가 도구 실행 전에 루프를 끝내버린다.
+    const hasFinalToolCalls = Boolean(finalMessage.tool_calls?.length);
     return {
       messages: [finalMessage],
       skipSave: false,
-      ...(textAccumulated ? { answer: textAccumulated } : {}),
+      ...(textAccumulated && !hasFinalToolCalls ? { answer: textAccumulated } : {}),
     };
   }
 
   function shouldContinue(state: GraphStateType): 'tools' | 'save_message' {
-    if (state.answer) return 'save_message';
+    // tool_calls를 answer보다 먼저 본다. 순서가 반대면 preamble을 내는 모델에서
+    // 도구가 한 번도 실행되지 않고 preamble이 최종 답변으로 저장된다.
     const lastMessage = state.messages[state.messages.length - 1];
     if ((lastMessage as AIMessage).tool_calls?.length) return 'tools';
     return 'save_message';
@@ -901,7 +910,7 @@ export function createRagGraph(
 
     try {
       const result = await Promise.race([
-        llm.invoke([
+        answerLlm.invoke([
           new SystemMessage(GROUNDED_REPAIR_SYSTEM_PROMPT),
           new HumanMessage(
             [
