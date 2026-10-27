@@ -36,13 +36,13 @@ const components: Components = {
     const isBlock = className?.includes('language-');
     if (isBlock) {
       return (
-        <code className="my-2 block overflow-x-auto rounded-lg bg-[#1f2937] px-3 py-2 font-mono text-xs text-slate-100">
+        <code className="my-2 block overflow-x-auto rounded-lg bg-[var(--text-primary)] px-3 py-2 font-mono text-xs text-slate-100">
           {children}
         </code>
       );
     }
     return (
-      <code className="rounded bg-[#eff3f7] px-1.5 py-0.5 font-mono text-xs text-[var(--accent-hover)]">
+      <code className="rounded bg-[var(--bg-inset)] px-1.5 py-0.5 font-mono text-xs text-[var(--accent-hover)]">
         {children}
       </code>
     );

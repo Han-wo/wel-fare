@@ -246,7 +246,7 @@ export default function PolicyDetailPage() {
                 marginTop: 18,
                 padding: 16,
                 background: 'var(--accent-soft)',
-                border: '1px solid rgba(45,106,95,0.2)',
+                border: '1px solid rgba(66, 72, 116,0.2)',
                 borderRadius: 12,
               }}
             >

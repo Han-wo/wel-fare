@@ -432,7 +432,7 @@ export default function AdminPage() {
                 background: 'var(--danger-soft)',
                 color: 'var(--danger)',
                 fontSize: 13,
-                border: '1px solid rgba(181,75,58,0.2)',
+                border: '1px solid rgba(192, 69, 90,0.2)',
               }}
             >
               {error}
@@ -457,7 +457,7 @@ export default function AdminPage() {
                   width: 8,
                   height: 8,
                   borderRadius: 999,
-                  background: stats?.sync.isSyncing ? '#c98f2b' : '#4a7c59',
+                  background: stats?.sync.isSyncing ? 'var(--warning)' : 'var(--success)',
                 }}
               />
               <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
@@ -932,8 +932,8 @@ function FreshnessBadge({
         }
       : freshness === 'warning'
         ? {
-            background: 'rgba(201, 143, 43, 0.14)',
-            color: '#8c641d',
+            background: 'rgba(181, 129, 42, 0.14)',
+            color: 'var(--warning-text)',
             label: '주의',
           }
         : freshness === 'stale'
@@ -1257,7 +1257,7 @@ function SyncProgressModal({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(10, 16, 24, 0.32)',
+        background: 'rgba(39, 55, 77, 0.32)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -1490,8 +1490,8 @@ function SeedProgressCard({ seed }: { seed: SyncSeedProgress }) {
   return (
     <div
       style={{
-        border: `1px solid ${active ? 'rgba(45,106,95,0.28)' : 'var(--border)'}`,
-        background: active ? 'rgba(223,236,232,0.5)' : 'var(--bg-subtle)',
+        border: `1px solid ${active ? 'rgba(66, 72, 116,0.28)' : 'var(--border)'}`,
+        background: active ? 'rgba(220, 214, 247,0.5)' : 'var(--bg-subtle)',
         borderRadius: 12,
         padding: 16,
       }}

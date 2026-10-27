@@ -5,6 +5,7 @@ import { Settings } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { NotifRow, type NotifType } from '../../../components/notifications/notif-row';
 import { formatRelativeKoreanTime } from '../../../lib/datetime';
+import { PushToggle } from '../../../components/notifications/push-toggle';
 
 interface Notification {
   id: string;
@@ -157,6 +158,10 @@ export default function NotificationsPage() {
           background: 'var(--bg-canvas)',
         }}
       >
+        <div style={{ marginBottom: 16 }}>
+          <PushToggle />
+        </div>
+
         <div
           className="notifications-tabs-responsive"
           style={{

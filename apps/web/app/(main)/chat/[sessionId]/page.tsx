@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onEnterSubmit } from '@/lib/keyboard';
 import { useParams, useSearchParams } from 'next/navigation';
 import {
   ArrowDown,
@@ -15,6 +16,7 @@ import { useChat, type ChatThinkPhase } from '../../../../hooks/useChat';
 import { MarkdownMessage } from '../../../../components/markdown';
 import { BrandMark } from '../../../../components/brand-mark';
 import { HitlPanel } from '../../../../components/hitl-panel';
+import { MessageEnter, PanelPresence } from '../../../../components/motion/enter';
 import { formatClockKorean, formatRelativeKoreanTime } from '../../../../lib/datetime';
 import { useUserStore } from '../../../../store/user.store';
 
@@ -276,8 +278,8 @@ export default function ChatSessionPage() {
               !isUser && thinkingPhases.length > 0 && thinkingAssistantId === m.id;
 
             return (
+              <MessageEnter key={m.id}>
               <div
-                key={m.id}
                 style={{
                   display: 'flex',
                   justifyContent: isUser ? 'flex-end' : 'flex-start',
@@ -301,8 +303,8 @@ export default function ChatSessionPage() {
                         height: 28,
                         borderRadius: 999,
                         flexShrink: 0,
-                        background: '#c8d8d0',
-                        color: '#2d4a3a',
+                        background: 'var(--accent-soft)',
+                        color: 'var(--accent-text)',
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -368,7 +370,7 @@ export default function ChatSessionPage() {
                         background: isUser ? 'var(--accent)' : 'var(--bg-surface)',
                         border: isUser ? 'none' : '1px solid var(--border)',
                         boxShadow: isUser ? 'var(--shadow-md)' : 'var(--shadow)',
-                        color: isUser ? '#f6fbf9' : 'var(--text-primary)',
+                        color: isUser ? 'var(--blue-25)' : 'var(--text-primary)',
                         borderBottomRightRadius: isUser ? 8 : 16,
                         borderBottomLeftRadius: isUser ? 16 : 8,
                         overflowWrap: 'anywhere',
@@ -395,6 +397,7 @@ export default function ChatSessionPage() {
                   </div>
                 </div>
               </div>
+              </MessageEnter>
             );
           })}
 
@@ -429,7 +432,8 @@ export default function ChatSessionPage() {
             </div>
           )}
 
-          {activeHitl && (
+          <PanelPresence show={Boolean(activeHitl)}>
+            {activeHitl ? (
             <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
               <div
                 className="chat-message-track-responsive"
@@ -451,7 +455,8 @@ export default function ChatSessionPage() {
                 />
               </div>
             </div>
-          )}
+            ) : null}
+          </PanelPresence>
 
           <div ref={bottomRef} />
         </div>
@@ -485,6 +490,7 @@ export default function ChatSessionPage() {
         }}
       >
         <div
+          className="focus-ring-within"
           style={{
             maxWidth: 1120,
             margin: '0 auto',
@@ -499,12 +505,7 @@ export default function ChatSessionPage() {
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
+            onKeyDown={onEnterSubmit(handleSend)}
             placeholder="답변을 이어서 질문해보세요..."
             disabled={isLoading}
             rows={1}

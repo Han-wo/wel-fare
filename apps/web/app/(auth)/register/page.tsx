@@ -225,16 +225,16 @@ function RegisterForm() {
       <div
         className="auth-side-responsive"
         style={{
-          background: '#1a1915',
-          color: '#f5f3ee',
+          background: 'var(--text-primary)',
+          color: 'var(--blue-25)',
           padding: 48,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
         }}
       >
-        <Link href="/" style={{ textDecoration: 'none', color: '#f5f3ee' }}>
-          <div className="brand-lockup" style={{ color: '#f5f3ee' }}>
+        <Link href="/" style={{ textDecoration: 'none', color: 'var(--blue-25)' }}>
+          <div className="brand-lockup" style={{ color: 'var(--blue-25)' }}>
             <BrandMark />
             welFareAI
           </div>
@@ -259,7 +259,7 @@ function RegisterForm() {
               marginTop: 16,
               fontSize: 14,
               lineHeight: 1.7,
-              color: 'rgba(245,243,238,0.7)',
+              color: 'rgba(244, 238, 255,0.7)',
             }}
           >
             거주 지역, 가구 형태, 소득 수준을 저장해두면 실제로 신청할 수 있는 지원만
@@ -282,7 +282,7 @@ function RegisterForm() {
                   alignItems: 'center',
                   gap: 10,
                   fontSize: 13,
-                  color: 'rgba(245,243,238,0.8)',
+                  color: 'rgba(244, 238, 255,0.8)',
                 }}
               >
                 <Check size={14} style={{ color: 'var(--accent)' }} />
@@ -709,7 +709,7 @@ function RegisterForm() {
                     background: 'var(--danger-soft)',
                     color: 'var(--danger)',
                     fontSize: 13,
-                    border: '1px solid rgba(181,75,58,0.18)',
+                    border: '1px solid rgba(192, 69, 90,0.18)',
                   }}
                 >
                   {serverError}

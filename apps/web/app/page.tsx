@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { isComposingEnter } from '@/lib/keyboard';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ArrowRight, FileCheck, ShieldCheck, Sparkles, UserCheck } from 'lucide-react';
@@ -50,7 +51,7 @@ export default function LandingPage() {
           justifyContent: 'space-between',
           padding: '20px 48px',
           borderBottom: '1px solid var(--border)',
-          background: 'rgba(245, 243, 238, 0.85)',
+          background: 'rgba(244, 238, 255, 0.85)',
           backdropFilter: 'blur(12px)',
           WebkitBackdropFilter: 'blur(12px)',
           position: 'sticky',
@@ -136,7 +137,7 @@ export default function LandingPage() {
         </div>
 
         <div
-          className="reveal reveal-d3"
+          className="reveal reveal-d3 focus-ring-within"
           style={{
             marginTop: 40,
             maxWidth: 720,
@@ -151,10 +152,10 @@ export default function LandingPage() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                go();
-              }
+              if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+              if (isComposingEnter(e)) return;
+              e.preventDefault();
+              go();
             }}
             style={{
               width: '100%',

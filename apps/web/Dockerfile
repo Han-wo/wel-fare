@@ -30,7 +30,10 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:3001
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
-RUN pnpm --filter @welfare-ai/web exec next build
+# public/은 현재 비어 있어 레포에 없다(git은 빈 디렉터리를 추적하지 않음).
+# 아래 COPY가 깨지지 않도록 보장해 두면, 나중에 정적 자산을 추가해도 그대로 동작한다.
+RUN mkdir -p apps/web/public \
+ && pnpm --filter @welfare-ai/web exec next build
 
 # ── Stage 5: production runner ────────────────────────────────────────────────
 FROM node:22-alpine AS runner

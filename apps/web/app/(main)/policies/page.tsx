@@ -276,6 +276,7 @@ export default function PoliciesListPage() {
               }}
             />
             <select
+              className="focus-ring-self"
               value={selectedSidoCode}
               onChange={(e) => setSelectedSidoCode(e.target.value)}
               aria-label="지역 필터"

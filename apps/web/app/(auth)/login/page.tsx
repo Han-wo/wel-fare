@@ -58,16 +58,16 @@ export default function LoginPage() {
       <div
         className="auth-side-responsive"
         style={{
-          background: '#1a1915',
-          color: '#f5f3ee',
+          background: 'var(--text-primary)',
+          color: 'var(--blue-25)',
           padding: 48,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
         }}
       >
-        <Link href="/" style={{ textDecoration: 'none', color: '#f5f3ee' }}>
-          <div className="brand-lockup" style={{ color: '#f5f3ee' }}>
+        <Link href="/" style={{ textDecoration: 'none', color: 'var(--blue-25)' }}>
+          <div className="brand-lockup" style={{ color: 'var(--blue-25)' }}>
             <BrandMark />
             welFareAI
           </div>
@@ -81,14 +81,14 @@ export default function LoginPage() {
               fontWeight: 500,
               letterSpacing: '-0.02em',
               margin: 0,
-              color: '#f5f3ee',
+              color: 'var(--blue-25)',
             }}
           >
             &ldquo;복지 정보는 흩어져 있고, 신청 조건은 늘 복잡합니다. 질문 한 번에 필요한
             답만 받아보세요.&rdquo;
           </p>
           <p
-            style={{ marginTop: 20, fontSize: 13, color: 'rgba(245,243,238,0.6)' }}
+            style={{ marginTop: 20, fontSize: 13, color: 'rgba(244, 238, 255,0.6)' }}
           >
             welFareAI · AI 복지 컨시어지
           </p>
@@ -200,7 +200,7 @@ export default function LoginPage() {
                   background: 'var(--danger-soft)',
                   color: 'var(--danger)',
                   fontSize: 13,
-                  border: '1px solid rgba(181,75,58,0.18)',
+                  border: '1px solid rgba(192, 69, 90,0.18)',
                 }}
               >
                 {serverError}

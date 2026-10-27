@@ -26,6 +26,7 @@ import {
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
+import { PHASE_COLOR } from '@/lib/palette';
 
 interface TraceNode {
   id: string;
@@ -108,79 +109,79 @@ const PHASE_ICON_MAP: Record<TraceFlowData['iconKey'], LucideIcon> = {
 const KIND_META: Record<string, KindMeta> = {
   question: {
     label: '질문',
-    color: '#2f6f5b',
+    color: PHASE_COLOR.question,
     phase: 'question',
     iconKey: 'question',
   },
   route: {
     label: '라우트',
-    color: '#4f6ad7',
+    color: PHASE_COLOR.route,
     phase: 'route',
     iconKey: 'route',
   },
   profile: {
     label: '프로필',
-    color: '#6b8f79',
+    color: PHASE_COLOR.profile,
     phase: 'profile',
     iconKey: 'profile',
   },
   tool: {
     label: '도구',
-    color: '#b37a32',
+    color: PHASE_COLOR.tool,
     phase: 'tool',
     iconKey: 'tool',
   },
   Policy: {
     label: '정책',
-    color: '#265d8f',
+    color: PHASE_COLOR.retrieval,
     phase: 'retrieval',
     iconKey: 'retrieval',
   },
   HousingAnnouncement: {
     label: '주택 공고',
-    color: '#5371b9',
+    color: PHASE_COLOR.retrieval,
     phase: 'retrieval',
     iconKey: 'retrieval',
   },
   HousingComplex: {
     label: '단지',
-    color: '#7d69b6',
+    color: PHASE_COLOR.retrieval,
     phase: 'retrieval',
     iconKey: 'retrieval',
   },
   WelfareFacility: {
     label: '시설',
-    color: '#3d8b83',
+    color: PHASE_COLOR.retrieval,
     phase: 'retrieval',
     iconKey: 'retrieval',
   },
   Document: {
     label: '문서',
-    color: '#8896a8',
+    color: PHASE_COLOR.retrieval,
     phase: 'retrieval',
     iconKey: 'document',
   },
   LifeStage: {
     label: '생애주기',
-    color: '#d88057',
+    color: PHASE_COLOR.graph,
     phase: 'graph',
     iconKey: 'graph',
   },
   TargetGroup: {
     label: '대상군',
-    color: '#b86868',
+    color: PHASE_COLOR.graph,
     phase: 'graph',
     iconKey: 'graph',
   },
   Theme: {
     label: '테마',
-    color: '#8a6dd1',
+    color: PHASE_COLOR.graph,
     phase: 'graph',
     iconKey: 'graph',
   },
   Region: {
     label: '지역',
-    color: '#5f8c4d',
+    color: PHASE_COLOR.graph,
     phase: 'graph',
     iconKey: 'graph',
   },
@@ -292,7 +293,7 @@ function TraceGraphCanvas({
               key={phase.id}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${
                 activePhase
-                  ? 'border-[rgba(47,111,91,0.24)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                  ? 'border-[rgba(81, 89, 168,0.24)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
                   : 'border-[var(--border)] bg-white/74 text-[var(--text-secondary)]'
               }`}
             >
@@ -336,8 +337,8 @@ function TraceGraphCanvas({
                   key={phase.id}
                   className={`rounded-full border px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-[0.16em] transition ${
                     activePhase
-                      ? 'border-[rgba(47,111,91,0.22)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
-                      : 'border-[rgba(82,99,121,0.12)] bg-white/70 text-[var(--text-muted)]'
+                      ? 'border-[rgba(81, 89, 168,0.22)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                      : 'border-[rgba(82, 109, 130,0.12)] bg-white/70 text-[var(--text-muted)]'
                   }`}
                 >
                   {phase.label}
@@ -358,7 +359,7 @@ function TraceGraphCanvas({
             maxZoom={1.6}
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
           >
-            <Background color="rgba(124, 138, 157, 0.12)" gap={30} size={1} />
+            <Background color="rgba(157, 178, 191, 0.12)" gap={30} size={1} />
             <Controls
               showInteractive={false}
               className="!overflow-hidden !rounded-2xl !border !border-[var(--border)] !bg-white/92"
@@ -395,7 +396,7 @@ function TraceGraphCanvas({
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
                   메타데이터
                 </p>
-                <pre className="mt-3 max-h-[280px] overflow-auto rounded-[18px] bg-[rgba(19,32,51,0.04)] px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]">
+                <pre className="mt-3 max-h-[280px] overflow-auto rounded-[18px] bg-[rgba(39, 55, 77,0.04)] px-3 py-3 text-xs leading-6 text-[var(--text-secondary)]">
                   {formatJson(selectedNode.meta)}
                 </pre>
               </div>
@@ -432,15 +433,15 @@ function TraceFlowNode({ data, selected }: NodeProps<Node<TraceFlowData>>) {
 
   return (
     <div
-      className="w-full rounded-[20px] border bg-white/94 px-4 py-3 shadow-[0_12px_24px_rgba(20,31,45,0.08)] backdrop-blur transition"
+      className="w-full rounded-[20px] border bg-white/94 px-4 py-3 shadow-[0_12px_24px_rgba(39, 55, 77,0.08)] backdrop-blur transition"
       style={{
         borderColor: selected ? color : data.highlighted ? `${color}99` : `${color}55`,
         opacity: data.faded ? 0.38 : 1,
         boxShadow: selected
-          ? `0 0 0 2px ${color}24, 0 18px 32px rgba(20, 31, 45, 0.14)`
+          ? `0 0 0 2px ${color}24, 0 18px 32px rgba(39, 55, 77, 0.14)`
           : data.highlighted
-            ? '0 14px 26px rgba(20,31,45,0.10)'
-            : '0 10px 22px rgba(20,31,45,0.08)',
+            ? '0 14px 26px rgba(39, 55, 77,0.10)'
+            : '0 10px 22px rgba(39, 55, 77,0.08)',
       }}
     >
       <Handle
@@ -605,7 +606,7 @@ function buildFlowGraph(graph: TraceGraph, activeNodeId: string | null) {
         type: MarkerType.ArrowClosed,
         width: 18,
         height: 18,
-        color: highlighted ? '#2f6f5b' : 'rgba(82,99,121,0.32)',
+        color: highlighted ? PHASE_COLOR.question : 'rgba(82,109,130,0.34)',
       },
       label: highlighted && adjacentToActive ? truncate(formatEdgeLabel(edge.label), 18) : undefined,
       labelStyle: highlighted
@@ -623,7 +624,7 @@ function buildFlowGraph(graph: TraceGraph, activeNodeId: string | null) {
         : undefined,
       labelBgPadding: highlighted ? [6, 3] : undefined,
       style: {
-        stroke: highlighted ? 'rgba(47,111,91,0.74)' : 'rgba(82,99,121,0.12)',
+        stroke: highlighted ? 'rgba(81, 89, 168,0.74)' : 'rgba(82, 109, 130,0.12)',
         strokeWidth: highlighted ? 2.2 : 1,
         strokeDasharray: highlighted ? undefined : '4 7',
       },

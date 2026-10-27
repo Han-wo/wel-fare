@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 파비콘 전용. 16px에서 말풍선 꼬리와 W가 같이 뭉개지므로
+       말풍선을 타일에 꽉 채우고 W 획을 굵혔다(4.6 → 5.8). -->
+  <rect width="64" height="64" rx="14" fill="#0d47a1"/>
+  <path d="M32 9 C46.6 9 56 17.6 56 29.2 C56 40.8 46.6 49.4 32 49.4
+           C29.4 49.4 26.9 49.1 24.6 48.5 L12 54 L16 43.3
+           C10.4 39.6 8 34.7 8 29.2 C8 17.6 17.4 9 32 9 Z" fill="#ffffff"/>
+  <path d="M20 23.5 L26.8 37.5 L32 28.5 L37.2 37.5 L44 23.5"
+        fill="none" stroke="#0d47a1" stroke-width="5.8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -4,38 +4,70 @@
 
 @layer base {
   :root {
-    --bg-canvas: #f5f3ee;
+    /* ── 원색 램프 ──────────────────────────────────────────────
+     * 파란색 단색 램프. 계열이 하나라 섞일 일이 없고, 명도만으로
+     * 위계가 서서 면·글자·액센트를 전부 여기서 끌어 쓴다.
+     * ★ 표시는 팔레트 원본 색, 나머지는 단계를 메우기 위한 보간값. */
+    --blue-25: #f2f8fe;
+    --blue-50: #e3f2fd; /* ★ */
+    --blue-100: #d2e9fb;
+    --blue-200: #90caf9; /* ★ */
+    --blue-500: #2196f3; /* ★ */
+    --blue-900: #0d47a1; /* ★ */
+
+    /* ── 면 ─────────────────────────────────────────────────── */
+    --bg-canvas: var(--blue-25);
     --bg-surface: #ffffff;
-    --bg-subtle: #faf9f6;
-    --bg-hover: #f2efe8;
-    --bg-sidebar: #f0ede5;
+    --bg-subtle: #f8fbff;
+    --bg-hover: var(--blue-50);
+    --bg-sidebar: var(--blue-50);
+    /* 코드블록·kbd·스켈레톤처럼 한 단계 더 눌러야 하는 자리. */
+    --bg-inset: var(--blue-100);
 
-    --border: #e6e2d6;
-    --border-strong: #d6d1c2;
+    /* ── 테두리 ─────────────────────────────────────────────── */
+    --border: #dbeafa;
+    --border-strong: var(--blue-200);
+    /* 입력창처럼 "경계가 보여야 컴포넌트를 알아볼 수 있는" 자리 전용.
+     * 장식용 --border로는 WCAG 비텍스트 대비 3:1을 못 맞춘다. */
+    --border-field: #7d91ac;
 
-    --text-primary: #1a1915;
-    --text-secondary: #4a473e;
-    --text-muted: #8a8678;
-    --text-faint: #b4afa0;
+    /* ── 글자 ───────────────────────────────────────────────────
+     * 순흑 대신 같은 계열의 짙은 남색. 파란 배경에서 검정은 들뜬다.
+     * 채도를 단계별로 낮춰 본문이 피로하지 않게 했다.
+     * 전부 흰 배경과 캔버스 양쪽에서 기준을 넘는 값으로 계산했다. */
+    --text-primary: #213858; /* 11.9 : 1 */
+    --text-secondary: #486081; /* 6.4 : 1 */
+    --text-muted: #5f738f; /* 4.8 : 1 */
+    --text-faint: #8191a7; /* 3.2 : 1 */
 
-    --accent: #2d6a5f;
-    --accent-hover: #235951;
-    --accent-soft: #dfece8;
-    --accent-text: #1f4d45;
+    /* ── 브랜드 액센트 ───────────────────────────────────────────
+     * blue-500(#2196f3)은 흰 글자 대비가 3.1밖에 안 나와 버튼 배경으로
+     * 쓸 수 없다. 버튼·링크는 blue-900, blue-500은 3:1이면 충분한
+     * 자리(포커스 링·아이콘·강조선)에만 쓴다. */
+    --accent: var(--blue-900);
+    --accent-hover: #0a3a85;
+    --accent-soft: var(--blue-50);
+    --accent-text: var(--blue-900);
+    /* 밝은 보조 강조 — 텍스트에는 쓰지 않는다. */
+    --accent-bright: var(--blue-500);
 
-    --success: #4a7c59;
-    --success-soft: #e6efe6;
+    /* ── 상태색 ─────────────────────────────────────────────────
+     * 초록·호박·빨강이라는 관습은 유지한다(상태를 브랜드색으로 바꾸면
+     * 읽을 수 없게 된다). 대비 기준을 넘는 값으로 맞췄다. */
+    --success: #2f7d6b;
+    --success-soft: #dbefe9;
 
-    --warning: #c98f2b;
-    --warning-soft: #f9f0d9;
-    --warning-text: #8a5d10;
+    --warning: #8f6520;
+    --warning-soft: #f7eeda;
+    --warning-text: #7a5512;
 
-    --danger: #b54b3a;
-    --danger-soft: #f6e2de;
+    --danger: #c0455a;
+    --danger-soft: #f9e1e6;
 
-    --shadow-sm: 0 1px 2px rgba(26, 25, 21, 0.04);
-    --shadow: 0 1px 3px rgba(26, 25, 21, 0.06), 0 1px 2px rgba(26, 25, 21, 0.04);
-    --shadow-md: 0 4px 12px rgba(26, 25, 21, 0.06), 0 2px 4px rgba(26, 25, 21, 0.04);
+    /* 그림자 틴트도 같은 계열로. 중성 회색 그림자는 파란 면 위에서 탁해진다. */
+    --shadow-sm: 0 1px 2px rgba(33, 56, 88, 0.05);
+    --shadow: 0 1px 3px rgba(33, 56, 88, 0.07), 0 1px 2px rgba(33, 56, 88, 0.05);
+    --shadow-md: 0 4px 12px rgba(33, 56, 88, 0.08), 0 2px 4px rgba(33, 56, 88, 0.05);
 
     --radius-xs: 6px;
     --radius-sm: 8px;
@@ -178,7 +210,7 @@
     padding: 10px 12px;
     border-radius: var(--radius-sm);
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-field);
     font-family: var(--font);
     font-size: 14px;
     color: var(--text-primary);
@@ -216,7 +248,7 @@
     align-items: center;
     padding: 2px 6px;
     border-radius: 4px;
-    background: var(--bg-hover);
+    background: var(--bg-inset);
     border: 1px solid var(--border);
     font-size: 11px;
     color: var(--text-secondary);
@@ -224,19 +256,17 @@
     font-weight: 500;
   }
 
+  /* 말풍선 마크를 담는 타일. 안의 SVG가 currentColor로 말풍선을 칠하므로
+   * color가 말풍선 색, background가 타일 색이다. */
   .brand-mark {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 28px;
     height: 28px;
-    border-radius: 6px;
+    border-radius: 7px;
     background: var(--accent);
     color: #fff;
-    font-family: 'Times New Roman', serif;
-    font-weight: 600;
-    font-size: 16px;
-    letter-spacing: -0.03em;
     flex-shrink: 0;
   }
 
@@ -271,6 +301,36 @@
   }
   .chip:active {
     transform: scale(0.98);
+  }
+
+  /* 포커스 표시 — 키보드 사용자가 현재 위치를 볼 수 있어야 한다.
+   * :focus-visible이라 마우스 클릭에는 링이 안 뜨고 키보드 탐색에만 뜬다. */
+  .btn-primary:focus-visible,
+  .btn-secondary:focus-visible,
+  .btn-ghost:focus-visible,
+  .chip:focus-visible,
+  a:focus-visible,
+  button:focus-visible,
+  [role='button']:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  /* 입력 래퍼용. 안쪽 textarea가 outline:none이라, 경계를 가진 래퍼가
+   * 대신 포커스를 표시한다. 이게 없으면 키보드로 입력창에 들어왔을 때
+   * 아무 변화가 없다. */
+  /* 인라인 style의 outline:'none'을 이기려면 !important가 필요하다.
+   * 인라인 선언이 스타일시트 규칙보다 우선하기 때문. */
+  .focus-ring-self:focus-visible {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: 2px;
+  }
+
+  .focus-ring-within:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 }
 
@@ -362,7 +422,7 @@
     border-radius: 999px !important;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 10px 28px rgba(26, 25, 21, 0.12);
+    box-shadow: 0 10px 28px rgba(39, 55, 77, 0.14);
   }
 
   .app-mobile-drawer-backdrop.is-open,
@@ -371,7 +431,7 @@
     position: fixed;
     inset: 0;
     z-index: 52;
-    background: rgba(15, 20, 18, 0.38);
+    background: rgba(39, 55, 77, 0.42);
   }
 
   .app-mobile-drawer.is-open,
@@ -382,7 +442,7 @@
     width: min(86vw, 320px);
     z-index: 53;
     overflow: hidden;
-    box-shadow: 0 20px 48px rgba(26, 25, 21, 0.18);
+    box-shadow: 0 20px 48px rgba(39, 55, 77, 0.2);
   }
 
   .app-mobile-bottom-nav,
@@ -397,8 +457,8 @@
     padding: 8px;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.94);
-    border: 1px solid rgba(214, 209, 194, 0.92);
-    box-shadow: 0 14px 32px rgba(26, 25, 21, 0.1);
+    border: 1px solid rgba(166, 177, 225, 0.6);
+    box-shadow: 0 14px 32px rgba(39, 55, 77, 0.12);
     backdrop-filter: blur(16px);
   }
 
@@ -770,7 +830,7 @@
 }
 
 .skeleton {
-  background: var(--bg-hover);
+  background: var(--bg-inset);
   border-radius: 12px;
   animation: skeletonPulse 1.4s ease-in-out infinite;
 }

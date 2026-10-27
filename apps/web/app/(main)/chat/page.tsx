@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
+import { onEnterSubmit } from '@/lib/keyboard';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { ArrowUp, Bookmark, Loader2, MapPin, User as UserIcon } from 'lucide-react';
 import { api } from '../../../lib/api';
@@ -177,6 +178,7 @@ function ChatIndex() {
           </div>
 
           <div
+            className="focus-ring-within"
             style={{
               background: 'var(--bg-surface)',
               border: '1px solid var(--border)',
@@ -188,12 +190,7 @@ function ChatIndex() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void startChat();
-                }
-              }}
+              onKeyDown={onEnterSubmit(() => void startChat())}
               placeholder="질문을 입력하세요..."
               disabled={loading}
               style={{

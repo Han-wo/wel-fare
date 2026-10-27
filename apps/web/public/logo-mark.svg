@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="WelfareAI">
+  <!-- 말풍선 실루엣에 W를 음각으로 뚫었다. 상담형 서비스임이 실루엣만으로 읽히게 한 것.
+       W를 양각으로 올리면 라운드 스퀘어 + 글자라는 흔한 형태가 되어 구별이 안 된다. -->
+  <rect width="64" height="64" rx="15" fill="#0d47a1"/>
+  <path d="M32 12 C45.3 12 54 19.9 54 30.5 C54 41.1 45.3 49 32 49 C29.6 49 27.3 48.7 25.2 48.2 L14 53 L17.6 43.6 C12.5 40.2 10 35.6 10 30.5 C10 19.9 18.7 12 32 12 Z" fill="#ffffff"/>
+  <path d="M21 25 L27 37 L32 29 L37 37 L43 25" fill="none" stroke="#0d47a1" stroke-width="4.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

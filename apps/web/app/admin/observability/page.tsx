@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { onEnterSubmit } from '@/lib/keyboard';
+import { PHASE_COLOR } from '@/lib/palette';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, RefreshCw, Search, X } from 'lucide-react';
 import { api } from '../../../lib/api';
@@ -80,14 +82,16 @@ function ratio(part: number, whole: number): string {
 
 const PAGE_SIZE = 25;
 
+// 트레이스 이벤트 색은 파이프라인 단계와 맞춘다 — 같은 단계면 그래프 뷰와 같은 색.
+// error만 상태색(danger)을 쓴다. 상태색은 예약이라 범주 색으로 돌려쓰지 않는다.
 const EVENT_COLORS: Record<string, string> = {
-  decision: '#c98f2b',
-  vector_search: '#6b8fb2',
-  graph_walk: '#a67cc2',
-  context: '#4a7c59',
-  session: '#2d6a5f',
-  answer: '#2d6a5f',
-  error: '#b54b3a',
+  decision: PHASE_COLOR.tool,
+  vector_search: PHASE_COLOR.retrieval,
+  graph_walk: PHASE_COLOR.graph,
+  context: PHASE_COLOR.route,
+  session: PHASE_COLOR.question,
+  answer: PHASE_COLOR.question,
+  error: 'var(--danger)',
 };
 const EVENT_TYPE_LABEL: Record<string, string> = {
   decision: '판단',
@@ -328,7 +332,7 @@ export default function ObservabilityPage() {
                 placeholder="질문·답변 검색"
                 value={queryInput}
                 onChange={(e) => setQueryInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+                onKeyDown={onEnterSubmit(applySearch)}
               />
             </div>
             <select

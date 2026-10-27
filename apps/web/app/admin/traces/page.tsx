@@ -1,6 +1,7 @@
 'use client';
 
 import { startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import { PHASE_COLOR } from '@/lib/palette';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
@@ -115,14 +116,16 @@ function formatDuration(value: number) {
   return `${Math.floor(value / 60_000)}m ${Math.floor((value / 1000) % 60)}s`;
 }
 
+// 트레이스 이벤트 색은 파이프라인 단계와 맞춘다 — 같은 단계면 그래프 뷰와 같은 색.
+// error만 상태색(danger)을 쓴다. 상태색은 예약이라 범주 색으로 돌려쓰지 않는다.
 const EVENT_COLORS: Record<string, string> = {
-  decision: '#c98f2b',
-  vector_search: '#6b8fb2',
-  graph_walk: '#a67cc2',
-  context: '#4a7c59',
-  session: '#2d6a5f',
-  answer: '#2d6a5f',
-  error: '#b54b3a',
+  decision: PHASE_COLOR.tool,
+  vector_search: PHASE_COLOR.retrieval,
+  graph_walk: PHASE_COLOR.graph,
+  context: PHASE_COLOR.route,
+  session: PHASE_COLOR.question,
+  answer: PHASE_COLOR.question,
+  error: 'var(--danger)',
 };
 
 const EVENT_TYPE_LABEL: Record<string, string> = {
@@ -279,7 +282,7 @@ export default function AdminTracesPage() {
               background: 'var(--danger-soft)',
               color: 'var(--danger)',
               fontSize: 13,
-              borderBottom: '1px solid rgba(181,75,58,0.2)',
+              borderBottom: '1px solid rgba(192, 69, 90,0.2)',
             }}
           >
             {error}
@@ -539,7 +542,7 @@ export default function AdminTracesPage() {
                                 color: 'var(--danger)',
                                 fontSize: 12,
                                 lineHeight: 1.5,
-                                border: '1px solid rgba(181,75,58,0.18)',
+                                border: '1px solid rgba(192, 69, 90,0.18)',
                               }}
                             >
                               {selectedTrace.error}

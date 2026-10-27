@@ -166,6 +166,7 @@ export function HitlPanel({
     <div
       ref={containerRef}
       tabIndex={0}
+      className="focus-ring-self"
       onKeyDown={handleKeyDown}
       role="dialog"
       aria-labelledby="hitl-panel-title"
@@ -376,6 +377,7 @@ export function HitlPanel({
                 }
               }}
               placeholder="직접 입력 후 Enter"
+              className="focus-ring-self"
               style={{
                 flex: 1,
                 border: 'none',
