@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { WebPushService } from './web-push.service';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThanOrEqual, Repository } from 'typeorm';
@@ -32,6 +33,7 @@ export class NotificationSchedulerService {
     @InjectRepository(PolicyRequirement)
     private readonly requirements: Repository<PolicyRequirement>,
     @InjectRepository(UserProfile) private readonly profiles: Repository<UserProfile>,
+    private readonly webPush: WebPushService,
   ) {}
 
   /** 저장(SAVED) 정책 중 마감 D-7/D-3/D-1 도달분에 deadline 알림 생성 */
@@ -141,8 +143,35 @@ export class NotificationSchedulerService {
       .insert()
       .values(drafts.map((d) => ({ ...d, policyId: d.policyId ?? undefined, sentAt: now })))
       .orIgnore()
+      // 실제로 들어간 행만 돌려받는다. orIgnore로 걸러진 중복은 raw에 안 담기므로
+      // 푸시도 자연히 한 번만 나간다(인앱 알림의 dedupe 규칙을 그대로 따른다).
+      .returning(['id', 'userId', 'title', 'body', 'policyId', 'dedupeKey'])
       .execute();
-    return result.identifiers.filter(Boolean).length;
+
+    const inserted = (result.raw ?? []) as Array<{
+      userId: string;
+      title: string;
+      body: string;
+      policyId: string | null;
+      dedupeKey: string;
+    }>;
+
+    // 푸시는 부가 전달 경로다. 실패해도 인앱 알림은 이미 저장됐으므로
+    // await로 스캔 전체를 붙잡지 않고, 에러도 삼켜서 크론을 죽이지 않는다.
+    for (const row of inserted) {
+      void this.webPush
+        .sendToUser(row.userId, {
+          title: row.title,
+          body: row.body,
+          url: row.policyId ? `/policies/${row.policyId}` : '/notifications',
+          tag: row.dedupeKey,
+        })
+        .catch((error) =>
+          this.logger.warn(`웹푸시 발송 건너뜀: ${(error as Error).message}`),
+        );
+    }
+
+    return inserted.length;
   }
 }
 
