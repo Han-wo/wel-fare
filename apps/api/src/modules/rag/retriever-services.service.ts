@@ -15,6 +15,14 @@ import { PolicyGraphService } from './policy-graph.service';
 import { HousingGraphService } from './housing-graph.service';
 import { SuggestionService } from './suggestion.service';
 import { QueryAnalysisService } from './query-analysis.service';
+import { TraceFacade } from './trace-facade.service';
+import { calcAge } from '@welfare-ai/shared-utils';
+import {
+  assessAge,
+  formatAgeVerdictLine,
+  normalizeAgeBound,
+  type AgeRequirement,
+} from './age-eligibility';
 import { ProfileFactsService } from '../profile/profile-facts.service';
 import type { ProfileWithFacts } from './profile-facts';
 
@@ -33,6 +41,7 @@ export class RetrieverServices {
     private readonly housingGraph: HousingGraphService,
     private readonly suggestionService: SuggestionService,
     private readonly queryAnalysis: QueryAnalysisService,
+    private readonly traceFacade: TraceFacade,
     private readonly profileFacts: ProfileFactsService,
   ) {}
 
@@ -99,7 +108,13 @@ export class RetrieverServices {
         }),
       )
       .andWhere('p.status = :status', { status: 'ACTIVE' })
-      .andWhere('p.source IN (:...sources)', { sources: ['bokjiro', 'local_bokjiro'] })
+      // 벡터 arm(searchGeneralWelfare의 sourceFilter)과 같은 코퍼스를 봐야 한다.
+      // static_doc·gov24가 빠져 있으면 "문화비 소득공제"처럼 NAMED_PROGRAMS에는
+      // 있는데 bokjiro에 없는 제도는 렉시컬 보강을 전혀 못 받는다 — 벡터가 놓치면
+      // assessNamedProgramCoverage가 "엔티티 부재"로 보고 HITL 재질문으로 샌다.
+      .andWhere('p.source IN (:...sources)', {
+        sources: ['bokjiro', 'local_bokjiro', 'gov24', 'static_doc'],
+      })
       .orderBy('p.syncedAt', 'DESC')
       .limit(5)
       .getMany();
@@ -136,8 +151,129 @@ export class RetrieverServices {
     };
   }
 
-  searchYouthPolicies(question: string, traceId?: string) {
-    return this.vectorRetrieval.searchYouthPolicies(question, traceId);
+  /**
+   * 청년정책 검색 + 연령 조건 결정적 판정.
+   *
+   * 시더가 넣어둔 구조화 조건(reqType:'AGE', minValue/maxValue)을 읽어
+   * 프로필 나이와 대조한 뒤, 판정 결과를 근거 본문에 한 줄로 덧붙인다.
+   * 확정적으로 답할 수 있는 축을 LLM 추측에 맡기지 않는 것이 목적이다.
+   *
+   * 결과를 걸러내지는 않는다 — 나이가 안 맞아도 "왜 안 되는지"를 사유와 함께
+   * 답하는 편이 목록에서 조용히 사라지는 것보다 낫고, 사용자가 가족 등
+   * 본인 아닌 사람을 물어보는 경우도 있다.
+   */
+  async searchYouthPolicies(
+    question: string,
+    userId: string,
+    traceId?: string,
+  ): Promise<RetrievalResult> {
+    const [result, profile] = await Promise.all([
+      this.vectorRetrieval.searchYouthPolicies(question, traceId),
+      this.getProfile(userId),
+    ]);
+
+    if (result.items.length === 0) return result;
+
+    const requirements = await this.loadAgeRequirements(result.items);
+    if (requirements.size === 0) return result;
+
+    const age = profile?.birthDate ? calcAge(profile.birthDate) : null;
+
+    // 나이를 모르는데 연령 조건이 걸린 정책이 있으면, 그 사실을 요약에 실어
+    // LLM이 "나이를 물어볼지"를 근거에 기반해 정하게 한다. 질문에 '청년'이라는
+    // 단어가 있는지(getClarificationRequest의 정규식)가 아니라, 검색된 정책이
+    // 실제로 연령을 요구하는지가 판단 근거가 되어야 한다.
+    if (age === null) {
+      if (traceId) {
+        this.traceFacade.addEvent(traceId, {
+          type: 'decision',
+          title: '연령 조건 판정 보류',
+          detail: `연령 조건이 있는 정책 ${requirements.size}건을 찾았으나 생년월일이 없어 판정을 보류했습니다.`,
+          payload: { reason: 'age_unknown', pending: requirements.size },
+        });
+      }
+      return {
+        ...result,
+        summary:
+          `${result.summary} 이 중 ${requirements.size}건은 연령 조건이 있는데 ` +
+          '사용자 생년월일이 없어 해당 여부를 확정하지 못했습니다 — 나이를 확인해 안내하세요.',
+      };
+    }
+
+    let mismatches = 0;
+    const items = result.items.map((item) => {
+      const assessment = assessAge(age, requirements.get(item.id) ?? null);
+      const line = formatAgeVerdictLine(assessment);
+      if (!line) return item;
+      if (assessment.verdict === 'MISMATCH') mismatches += 1;
+
+      return {
+        ...item,
+        content: `${item.content}\n${line}`,
+        metadata: { ...item.metadata, ageVerdict: assessment.verdict },
+      };
+    });
+
+    if (traceId) {
+      this.traceFacade.addEvent(traceId, {
+        type: 'decision',
+        title: '연령 조건 결정적 판정',
+        detail: `만 ${age}세 기준으로 청년정책 ${requirements.size}건의 연령 조건을 평가해 ${mismatches}건이 미해당입니다.`,
+        payload: { age, evaluated: requirements.size, mismatches },
+      });
+    }
+
+    return { ...result, items };
+  }
+
+  /**
+   * 검색된 문서의 연령 조건을 Postgres에서 한 번에 읽어온다.
+   *
+   * 구조화 조건은 Qdrant payload가 아니라 policy_requirements에 있다.
+   * Qdrant는 policyId를 `youth_<plcyNo>`로, Postgres는 externalId를
+   * `youth_center:<plcyNo>`로 쓰므로 접두어를 맞춰 조인한다.
+   */
+  private async loadAgeRequirements(
+    items: RetrievalItem[],
+  ): Promise<Map<string, AgeRequirement>> {
+    const byExternalId = new Map<string, string>();
+    for (const item of items) {
+      if (item.source !== 'youth_center') continue;
+      byExternalId.set(`youth_center:${item.id.replace(/^youth_/, '')}`, item.id);
+    }
+    if (byExternalId.size === 0) return new Map();
+
+    const rows = await this.policyRepo
+      .createQueryBuilder('p')
+      .innerJoin('p.requirements', 'r')
+      .select([
+        'p.externalId AS "externalId"',
+        'r.minValue AS "minValue"',
+        'r.maxValue AS "maxValue"',
+        'r.description AS "description"',
+      ])
+      .where('p.externalId IN (:...ids)', { ids: [...byExternalId.keys()] })
+      .andWhere('r.reqType = :reqType', { reqType: 'AGE' })
+      .getRawMany<{
+        externalId: string;
+        minValue: string | null;
+        maxValue: string | null;
+        description: string | null;
+      }>();
+
+    const result = new Map<string, AgeRequirement>();
+    for (const row of rows) {
+      const itemId = byExternalId.get(row.externalId);
+      if (!itemId) continue;
+      // numeric 컬럼은 드라이버가 문자열로 돌려준다.
+      result.set(itemId, {
+        // 원천의 0(= 제한 없음)을 도메인 경계로 정규화한다.
+        minValue: normalizeAgeBound(row.minValue === null ? null : Number(row.minValue)),
+        maxValue: normalizeAgeBound(row.maxValue === null ? null : Number(row.maxValue)),
+        description: row.description,
+      });
+    }
+    return result;
   }
 
   async searchPolicyEligibility(

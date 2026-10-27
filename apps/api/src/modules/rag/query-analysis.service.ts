@@ -6,6 +6,7 @@ import {
   type RouteTier,
 } from './route-fallback';
 import { getHitlFacts } from './profile-facts';
+import { POLICY_NAME_INDEX, type PolicyNameIndex } from './policy-name-index';
 
 export type RagRouteType = 'SEARCH' | 'ELIGIBILITY' | 'APPLICATION_ASSIST' | 'POST_APPLICATION';
 
@@ -127,6 +128,9 @@ export class QueryAnalysisService {
     @Optional()
     @Inject(ROUTE_FALLBACK_CLASSIFIER)
     private readonly routeFallback?: RouteFallbackClassifier | null,
+    @Optional()
+    @Inject(POLICY_NAME_INDEX)
+    private readonly policyNameIndex?: PolicyNameIndex | null,
   ) {}
 
   private extractDaysAhead(question: string) {
@@ -245,7 +249,8 @@ export class QueryAnalysisService {
     if (CLEAR_YOUTH.test(q) && !CLEAR_HOUSING_SUB.test(q)) {
       return {
         toolName: 'search_youth_policy',
-        args: { question: q, traceId: input.traceId },
+        // userId는 연령 조건 판정에 쓸 프로필을 끌어오기 위해 필요하다.
+        args: { question: q, userId: input.userId, traceId: input.traceId },
         detail: '정규식 규칙이 질문을 search_youth_policy로 바로 라우팅했습니다.',
       };
     }
@@ -277,7 +282,11 @@ export class QueryAnalysisService {
   // 질문에서 구체적으로 지목된 정책·제도명을 뽑는다. 검색 결과에 이 이름이
   // 전혀 없으면 "물어본 걸 못 찾은" 저신뢰 상태로 판정한다.
   extractNamedPrograms(question: string): string[] {
-    return [...new Set(NAMED_PROGRAMS.filter((program) => question.includes(program)))];
+    const curated = NAMED_PROGRAMS.filter((program) => question.includes(program));
+    // 큐레이션 목록은 별칭("문화비소득공제")과 통칭("기초생활")을 담아 코퍼스의
+    // 정식 명칭과 다른 표기를 흡수한다. 인덱스는 나머지 정책 전체를 커버한다.
+    const indexed = this.policyNameIndex?.match(question) ?? [];
+    return [...new Set([...curated, ...indexed])];
   }
 
   selectApplicationSources(input: { question: string; hasProfile: boolean }): ApplicationSource[] {

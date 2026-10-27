@@ -72,4 +72,26 @@ export const ANSWER_GROUNDING_GOLDEN: AnswerGroundingCase[] = [
     expectGrounded: true,
     note: '링크 없이 정책명만 — 정책명이 근거에 있으면 통과.',
   },
+  // 아래 두 건은 실제 프로덕션 trace에서 가져온 사례다. 지자체 복지는 동명 정책이
+  // 지역마다 있어 LLM이 괄호로 지역을 덧붙이는데, 순수 substring 비교는 이걸
+  // 환각으로 오탐했다(실측 5/6건 오탐 → 6초짜리 정정 LLM 유발).
+  {
+    id: 'region-annotated-policy-name',
+    answer:
+      '### 📋 [장애인활동지원 추가지원사업(충청북도)]\n- 지원내용: 활동지원 급여를 추가로 지원합니다.',
+    docs: [{ title: '장애인활동지원 추가지원사업', content: '[정책명] 장애인활동지원 추가지원사업' }],
+    expectGrounded: true,
+    note: '괄호 지역 주석은 근거를 벗어난 주장이 아니다 — 떼고 매치하면 통과.',
+  },
+  {
+    id: 'composed-label-not-a-policy',
+    answer:
+      '### 📋 [공공임대주택(예: 영구·국민임대) - 경기도 사례(양주시 옥정단지 등)]\n- 지원내용: 임대주택 공급',
+    docs: [{ title: '기존주택 매입임대', content: '[정책명] 기존주택 매입임대' }],
+    expectGrounded: false,
+    expectUngrounded: {
+      policyNames: ['공공임대주택(예: 영구·국민임대) - 경기도 사례(양주시 옥정단지 등)'],
+    },
+    note: '괄호를 떼도 남는 합성 레이블은 실제 정책명이 아니다 — 계속 잡아야 한다.',
+  },
 ];

@@ -61,6 +61,33 @@ function extractAmounts(answer: string): string[] {
 
 const digitsOnly = (value: string) => value.replace(/\D/g, '');
 
+// 괄호 주석(전각 포함)을 떼고 공백을 정규화한다.
+const PAREN_RE = /[(（][^)）]*[)）]/g;
+
+function stripParentheticals(value: string): string {
+  return value.replace(PAREN_RE, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 답변의 정책명이 근거에 있는지 판정한다.
+ *
+ * 원문 그대로 매치되지 않으면 괄호 주석을 떼고 한 번 더 본다. 지자체 복지는
+ * 동명 정책이 지역마다 있어서 LLM이 "장애인활동지원 추가지원사업(충청북도)"처럼
+ * 지역을 덧붙이는데, 이건 근거를 벗어난 주장이 아니라 유용한 구별 표기다.
+ * 순수 substring 비교는 이걸 환각으로 오탐해 6초짜리 정정 LLM을 태우고
+ * 멀쩡한 답변에 정정 부록을 붙였다 (실측 오탐 5/6건).
+ *
+ * 괄호 밖 텍스트까지 합성한 이름("공공임대주택(예: …) - 경기도 사례")은
+ * 괄호를 떼도 근거에 없으므로 여전히 ungrounded로 남는다 — 진짜 환각은 계속 잡는다.
+ */
+function isPolicyNameGrounded(name: string, haystack: string): boolean {
+  if (haystack.includes(name)) return true;
+
+  const stripped = stripParentheticals(name);
+  if (!stripped || stripped === name) return false;
+  return stripParentheticals(haystack).includes(stripped);
+}
+
 export function checkAnswerGrounding(
   answer: string | null | undefined,
   docs: GroundingDoc[],
@@ -78,7 +105,7 @@ export function checkAnswerGrounding(
 
   const policyNames: GroundingFinding[] = extractPolicyNames(text).map((name) => ({
     claim: name,
-    grounded: haystack.includes(name),
+    grounded: isPolicyNameGrounded(name, haystack),
   }));
 
   const amounts: GroundingFinding[] = extractAmounts(text).map((amount) => {

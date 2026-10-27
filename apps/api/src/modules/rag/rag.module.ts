@@ -34,6 +34,8 @@ import { ROUTE_FALLBACK_CLASSIFIER } from './route-fallback';
 import { RouteLlmFallbackService } from './route-llm-fallback.service';
 import { QuestionCondenserService } from './question-condenser.service';
 import { RerankerService } from './reranker.service';
+import { POLICY_NAME_INDEX } from './policy-name-index';
+import { PolicyNameIndexService } from './policy-name-index.service';
 
 @Module({
   imports: [
@@ -79,6 +81,14 @@ import { RerankerService } from './reranker.service';
         const enabled = config.get('RAG_ROUTE_LLM_FALLBACK', 'on') !== 'off';
         return enabled && config.get('OPENAI_API_KEY') ? new RouteLlmFallbackService() : null;
       },
+    },
+    PolicyNameIndexService,
+    {
+      // 신뢰도 게이트가 하드코딩 30개를 넘어 코퍼스 전체 정책명을 지목 신호로
+      // 쓰게 한다. QueryAnalysisService가 @Optional로 받으므로 단위 테스트는
+      // 이 provider 없이도 기존처럼 동작한다.
+      provide: POLICY_NAME_INDEX,
+      useExisting: PolicyNameIndexService,
     },
     RagService,
     RagOrchestratorService,
