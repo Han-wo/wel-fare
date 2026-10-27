@@ -45,6 +45,23 @@ const GENERAL_WELFARE_RESULT_LIMIT = 8;
 const GENERAL_WELFARE_SEMANTIC_THRESHOLD = 0.4;
 const GENERAL_WELFARE_ONTOLOGY_BOOST = 0.15;
 
+// 추천 질문용 후보 풀. 분류당 상한을 두고 걸러내므로 최종 필요 수(4)보다
+// 넉넉히 뽑아야 상한에 막혀 후보가 고갈되지 않는다.
+const SUGGESTION_CANDIDATE_LIMIT = 24;
+const SUGGESTION_PER_CATEGORY_CAP = 1;
+
+// 추천 질문은 "제도 카탈로그"에서만 뽑는다. lh_housing·applyhome은 개별 임대단지·
+// 모집공고 목록이라 코퍼스의 대부분(7만여 건)을 차지하는데, 프로필 텍스트에 들어가는
+// "무주택" 신호와 맞물려 후보 상위를 전부 잠식한다("국민임대 - 남구"가 6번 반복되는
+// 식). 제도 소스로 좁혀야 분야 상한(위)이 비로소 의미를 갖는다.
+const SUGGESTION_SOURCES = [
+  'bokjiro',
+  'local_bokjiro',
+  'gov24',
+  'static_doc',
+  'youth_center',
+] as const;
+
 type QdrantHit = {
   id?: string | number;
   score?: number | null;
@@ -400,26 +417,43 @@ export class VectorRetrievalService {
         const qdrantResults = await this.qdrantClient
           .search(this.collectionName, {
             vector: queryVector,
-            limit: 8,
+            limit: SUGGESTION_CANDIDATE_LIMIT,
             with_payload: true,
             score_threshold: 0.45,
+            filter: { should: SUGGESTION_SOURCES.map((source) => ({
+              key: 'source',
+              match: { value: source },
+            })) },
           })
           .catch(() => []);
 
-        return qdrantResults
-          .map((result) => {
-            const payload = (result.payload ?? {}) as Record<string, unknown>;
-            const content = ((payload.content ?? payload.text) as string) ?? '';
-            return {
-              name: extractTraceLabel(payload, 0),
-              content,
-            };
-          })
-          .map(({ content }) => {
-            const extracted = content.match(/\[(?:정책명|서비스명|시설명|단지명|공고명)\]\s*(.+)/)?.[1];
-            return extracted ? extracted.trim().split('\n')[0].trim() : null;
-          })
-          .filter((name): name is string => Boolean(name && name.length < 35));
+        // 프로필 텍스트 한 벡터로만 뽑으면 결과가 한 주제(주거·장애인 등)에
+        // 쏠려 추천 6칸이 같은 분야로 덮인다. 유사도 순서를 지키되 대분류당
+        // 인원을 제한해, 코퍼스에 있는 다른 분야(문화·여가 등)가 노출되게 한다.
+        const perCategory = new Map<string, number>();
+        const names: string[] = [];
+        for (const result of qdrantResults) {
+          const payload = (result.payload ?? {}) as Record<string, unknown>;
+          const content = ((payload.content ?? payload.text) as string) ?? '';
+          const extracted = content.match(
+            /\[(?:정책명|서비스명|시설명|단지명|공고명)\]\s*(.+)/,
+          )?.[1];
+          const name = extracted ? extracted.trim().split('\n')[0].trim() : null;
+          if (!name || name.length >= 35 || names.includes(name)) continue;
+
+          // category는 "신체건강,정신건강"처럼 복합값이라 대표(첫) 분류로 묶는다.
+          const category =
+            (typeof payload.category === 'string' ? payload.category : '')
+              .split(',')[0]
+              .trim() || '미분류';
+          const used = perCategory.get(category) ?? 0;
+          if (used >= SUGGESTION_PER_CATEGORY_CAP) continue;
+
+          perCategory.set(category, used + 1);
+          names.push(name);
+        }
+
+        return names;
       },
     });
 
