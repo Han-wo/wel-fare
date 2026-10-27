@@ -4,6 +4,7 @@
  * 실행: ts-node --transpile-only src/database/seeds/welfare-api.seed.ts
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import './http-agent'; // axios keepAlive 글로벌 적용
 import * as xml2js from 'xml2js';
 import { QdrantClient } from '@qdrant/js-client-rest';
@@ -452,7 +453,8 @@ async function main() {
   );
 }
 
-main()
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('welfare', main)
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

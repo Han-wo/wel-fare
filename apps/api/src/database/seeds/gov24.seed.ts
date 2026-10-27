@@ -18,6 +18,7 @@
  * 실행: pnpm --filter @welfare-ai/api run db:seed:gov24
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import './http-agent';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
@@ -419,7 +420,8 @@ async function main() {
   );
 }
 
-main()
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('gov24', main)
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

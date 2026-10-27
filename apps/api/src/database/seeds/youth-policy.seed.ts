@@ -7,6 +7,7 @@
  * Point ID offset: 1_500_000_000 (기존 시더와 충돌 없는 구간)
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { QdrantClient } from '@qdrant/js-client-rest';
@@ -578,7 +579,8 @@ async function main() {
   console.log(`   총 ${totalCount}개 청년정책이 source='youth_center'로 저장됨`);
 }
 
-main()
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('youth-policy', main)
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

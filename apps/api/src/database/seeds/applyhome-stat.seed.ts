@@ -12,6 +12,7 @@
  * 실행: ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome-stat.seed.ts
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import './http-agent'; // axios keepAlive 글로벌 적용
 import { QdrantClient } from '@qdrant/js-client-rest';
 import OpenAI from 'openai';
@@ -396,7 +397,8 @@ async function main() {
   console.log(`\n청약홈 통계 ${plan.vectorUpdates.length}개 문서 증분 적재 완료!`);
 }
 
-main().catch((error) => {
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('applyhome-stat', main).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

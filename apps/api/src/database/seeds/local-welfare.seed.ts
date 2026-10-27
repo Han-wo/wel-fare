@@ -4,6 +4,7 @@
  * 실행: ts-node --transpile-only src/database/seeds/local-welfare.seed.ts
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as xml2js from 'xml2js';
@@ -171,8 +172,10 @@ async function fetchList(pageNo: number): Promise<{ total: number; items: LocalP
     }),
   );
 
-  // 목록 API는 JSON 반환
-  const root = JSON.parse(data) as Record<string, unknown>;
+  // 목록 API는 XML 반환(상세와 동일). _type=json을 붙여도 XML이 오므로
+  // JSON.parse를 쓰면 "Unexpected token '<'"로 전체 시드가 죽는다.
+  const parsed = await parseXml(data);
+  const root = parsed.wantedList as Record<string, unknown>;
   const total = parseInt(root.totalCount as string, 10);
   const rawItems = root.servList as Record<string, string>[] | undefined;
   if (!rawItems) return { total, items: [] };
@@ -464,7 +467,8 @@ async function main() {
   );
 }
 
-main()
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('local-welfare', main)
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;

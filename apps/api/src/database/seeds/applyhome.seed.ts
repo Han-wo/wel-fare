@@ -11,6 +11,7 @@
  * 실행: ts-node -r dotenv/config --transpile-only src/database/seeds/applyhome.seed.ts
  */
 import axios from 'axios';
+import { recordSeedRun } from './sync-log.util';
 import './http-agent'; // axios keepAlive 글로벌 적용
 import { QdrantClient } from '@qdrant/js-client-rest';
 import neo4j from 'neo4j-driver';
@@ -384,7 +385,8 @@ async function main() {
   console.log(`\n청약홈 분양정보 증분 동기화 완료!`);
 }
 
-main()
+// CLI 실행도 동기화 로그를 남긴다 — RAG 캐시 버전이 이 기록에서 나온다.
+recordSeedRun('applyhome', main)
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;
