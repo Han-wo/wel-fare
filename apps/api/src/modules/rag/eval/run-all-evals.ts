@@ -6,6 +6,10 @@
  * 세 개의 골든셋 하네스(라우팅 / retrieval-HITL / 답변 그라운딩)를 한 번에
  * 돌려 사람이 읽는 통합 리포트를 출력한다. 회귀가 하나라도 있으면 종료 코드 1
  * 로 끝나 CI에서 실패로 잡힌다. 라우팅의 KNOWN_GAP은 빌드를 깨지 않는다.
+ *
+ * 답변 품질 골든셋(answer-quality)은 여기 없다 — 실제 서버·DB·OpenAI가
+ * 필요해 순수 함수 하네스와 성격이 다르고, 케이스당 10~50초가 걸린다.
+ * 따로 돌린다: pnpm --filter @welfare-ai/api run eval:answers
  */
 import { runRoutingHarness } from './routing-harness';
 import { QueryAnalysisService } from '../query-analysis.service';

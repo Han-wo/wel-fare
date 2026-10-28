@@ -35,7 +35,8 @@
     "db:seed:applyhome": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome.seed.ts",
     "db:seed:applyhome-cmpet": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome-cmpet.seed.ts",
     "db:seed:applyhome-stat": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/applyhome-stat.seed.ts",
-    "db:backfill:chunks": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/chunk-backfill.seed.ts"
+    "db:backfill:chunks": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/database/seeds/chunk-backfill.seed.ts",
+    "eval:answers": "TS_NODE_PROJECT=tsconfig.scripts.json ts-node -r dotenv/config src/modules/rag/eval/run-answer-quality.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
