@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { FACILITY_COLLECTION } from '../../common/qdrant-collections';
 import { ConfigService } from '@nestjs/config';
 import { OpenAIEmbeddings } from '@langchain/openai';
 import { QdrantClient } from '@qdrant/js-client-rest';
@@ -374,7 +375,8 @@ export class VectorRetrievalService {
           text: normalizedQuery,
           namespace: 'welfare-facility',
           limit: 16,
-          filter: { must: [{ key: 'source', match: { value: 'welfare_facility' } }] },
+          // 전용 컬렉션이라 source 필터가 필요 없다.
+          collection: FACILITY_COLLECTION,
           denseScoreThreshold: 0.35,
         });
         const searchResult = await this.rerankHits(normalizedQuery, candidates, 8);
@@ -476,11 +478,14 @@ export class VectorRetrievalService {
     limit: number;
     filter?: QdrantFilter;
     denseScoreThreshold?: number;
+    /** 기본은 정책 컬렉션. 시설처럼 분리된 컬렉션은 여기로 지정한다. */
+    collection?: string;
   }): Promise<QdrantHit[]> {
+    const collection = params.collection ?? this.collectionName;
     const queryVector = await this.embedQueryCached(params.text, params.namespace);
 
     const denseOnly = () =>
-      this.qdrantClient.search(this.collectionName, {
+      this.qdrantClient.search(collection, {
         vector: queryVector,
         limit: params.limit,
         filter: params.filter,
@@ -497,7 +502,7 @@ export class VectorRetrievalService {
 
     const prefetchLimit = Math.max(params.limit, 20);
     try {
-      const response = await this.qdrantClient.query(this.collectionName, {
+      const response = await this.qdrantClient.query(collection, {
         prefetch: [
           {
             query: queryVector,

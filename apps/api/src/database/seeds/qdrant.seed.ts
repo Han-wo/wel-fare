@@ -43,6 +43,12 @@ async function seedQdrant() {
       field_name: 'policyId',
       field_schema: 'keyword',
     });
+    // 모든 검색이 source로 범위를 좁힌다(일반복지 4종, 청약 4종 등).
+    // 인덱스가 없으면 필터가 전체 스캔으로 떨어진다.
+    await client.createPayloadIndex(collectionName, {
+      field_name: 'source',
+      field_schema: 'keyword',
+    });
 
     console.log(`✅ Qdrant 컬렉션 '${collectionName}' 생성 완료`);
   } else {

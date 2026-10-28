@@ -4,6 +4,7 @@
  * 실행: ts-node --transpile-only src/database/seeds/welfare-facility.seed.ts
  */
 import axios from 'axios';
+import { FACILITY_COLLECTION } from '../../common/qdrant-collections';
 import { recordSeedRun } from './sync-log.util';
 import './http-agent'; // axios keepAlive 글로벌 적용
 import * as xml2js from 'xml2js';
@@ -28,7 +29,9 @@ const BASE_URL = 'https://apis.data.go.kr/B554287/sclWlfrFcltInfoInqirService1';
 const PAGE_SIZE = 100;
 const EMBED_BATCH = 100;
 const EMBED_CONCURRENCY = 3; // 동시에 처리할 배치 수 (BATCH 100 * CONCURRENCY 3 = 라운드당 300)
-const COLLECTION = process.env.QDRANT_COLLECTION ?? 'welfare_policies';
+// 정책과 분리된 전용 컬렉션. 시설은 주소록이라 정책 검색 공간을
+// 차지하면 안 된다(qdrant-collections 참고).
+const COLLECTION = FACILITY_COLLECTION;
 
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL ?? 'http://localhost:6333',
