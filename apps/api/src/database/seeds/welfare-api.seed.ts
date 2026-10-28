@@ -4,6 +4,12 @@
  * 실행: ts-node --transpile-only src/database/seeds/welfare-api.seed.ts
  */
 import axios from 'axios';
+import {
+  DetailBudget,
+  isRateLimited,
+  loadStoredRawData,
+  pickStoredDetail,
+} from './detail-cache.util';
 import { recordSeedRun } from './sync-log.util';
 import './http-agent'; // axios keepAlive 글로벌 적용
 import * as xml2js from 'xml2js';
@@ -194,14 +200,51 @@ async function fetchList(pageNo: number): Promise<{ total: number; items: Policy
   };
 }
 
-async function fetchDetail(servId: string): Promise<Partial<PolicyDetail>> {
+const DETAIL_FIELDS = [
+  'tgtrDtlCn',
+  'slctCritCn',
+  'alwServCn',
+  'wlfareInfoOutlCn',
+  'crtrYr',
+] as const;
+
+/**
+ * 상세 조회. 저장된 rawData에 상세가 있으면 네트워크를 타지 않는다.
+ *
+ * 복지로는 일 1,000건 제한인데 목록이 461건이라 전건 조회만으로도
+ * 지자체 시더와 합치면 한도를 넘긴다. 한도를 넘기면 429가 오고, 예전에는
+ * 이걸 삼켜서 상세가 빈 채로 덮어써졌다 — 그래서 조회 실패 시 기존 값을
+ * 그대로 돌려주는 것이 핵심이다(나쁜 내용으로 퇴행시키지 않는다).
+ */
+async function fetchDetail(
+  servId: string,
+  stored: Map<string, Record<string, unknown>>,
+  budget: DetailBudget,
+): Promise<Partial<PolicyDetail>> {
+  const cached = pickStoredDetail(stored.get(`bokjiro:${servId}`), DETAIL_FIELDS);
+  if (cached) {
+    budget.countReused();
+    return cached as Partial<PolicyDetail>;
+  }
+  if (budget.isExhausted) {
+    budget.countFailed();
+    return {};
+  }
+
   try {
     const { data } = await axios.get(`${WELFARE_BASE_URL}/NationalWelfaredetailedV001`, {
       params: { serviceKey: API_KEY, servId },
       timeout: 10000,
     });
     const parsed = await parseXml(data);
-    const d = parsed.wantedDtl as Record<string, string>;
+    const d = (parsed.wantedDtl ?? {}) as Record<string, string>;
+    // 한도 초과는 200 본문에 에러로 오기도 한다.
+    if (!parsed.wantedDtl && typeof data === 'string' && data.includes('LIMITED_NUMBER')) {
+      budget.markExhausted();
+      budget.countFailed();
+      return {};
+    }
+    budget.countFetched();
     return {
       tgtrDtlCn: d.tgtrDtlCn,
       slctCritCn: d.slctCritCn,
@@ -209,7 +252,9 @@ async function fetchDetail(servId: string): Promise<Partial<PolicyDetail>> {
       wlfareInfoOutlCn: d.wlfareInfoOutlCn,
       crtrYr: d.crtrYr,
     };
-  } catch {
+  } catch (error) {
+    if (isRateLimited(error)) budget.markExhausted();
+    budget.countFailed();
     return {};
   }
 }
@@ -389,7 +434,10 @@ async function main() {
   console.log(`\n✅ 목록 수집 완료: ${allItems.length}개`);
 
   // 2. 상세 정보 수집 + 임베딩 + 저장 (배치)
-  console.log('🔍 상세 조회 + 임베딩 + 저장 중...');
+  // 이미 상세를 확보한 항목은 네트워크를 타지 않는다(일일 한도 보호).
+  const storedRawData = await loadStoredRawData('bokjiro');
+  const detailBudget = new DetailBudget();
+  console.log(`🔍 상세 조회 + 임베딩 + 저장 중... (저장본 ${storedRawData.size}건 보유)`);
   let vectorUpdated = 0;
   let graphUpdated = 0;
   let skipped = 0;
@@ -399,7 +447,7 @@ async function main() {
     // 상세 조회
     const details = await Promise.all(
       batch.map(async (item) => {
-        const detail = await fetchDetail(item.servId);
+        const detail = await fetchDetail(item.servId, storedRawData, detailBudget);
         return { ...item, ...detail } as PolicyDetail;
       }),
     );

@@ -4,6 +4,12 @@
  * 실행: ts-node --transpile-only src/database/seeds/local-welfare.seed.ts
  */
 import axios from 'axios';
+import {
+  DetailBudget,
+  isRateLimited,
+  loadStoredRawData,
+  pickStoredDetail,
+} from './detail-cache.util';
 import { recordSeedRun } from './sync-log.util';
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -199,7 +205,38 @@ async function fetchList(pageNo: number): Promise<{ total: number; items: LocalP
   };
 }
 
-async function fetchDetail(servId: string): Promise<Partial<LocalPolicyDetail>> {
+const DETAIL_FIELDS = [
+  'sprtTrgtCn',
+  'slctCritCn',
+  'alwServCn',
+  'aplyMtdCn',
+  'enfcBgngYmd',
+  'enfcEndYmd',
+] as const;
+
+/**
+ * 상세 조회. 저장된 rawData에 상세가 있으면 네트워크를 타지 않는다.
+ *
+ * 목록이 4,818건이라 전건 조회는 복지로 일일 한도(1,000건)를 크게 넘는다.
+ * 예전에는 429를 catch로 삼켜 상세가 빈 채로 덮어써졌고, syncHash가
+ * content에서 나오므로 멀쩡한 레코드가 더 나쁜 내용으로 재적재됐다.
+ * 조회 실패 시 기존 값을 그대로 돌려주는 것이 핵심이다.
+ */
+async function fetchDetail(
+  servId: string,
+  stored: Map<string, Record<string, unknown>>,
+  budget: DetailBudget,
+): Promise<Partial<LocalPolicyDetail>> {
+  const cached = pickStoredDetail(stored.get(`local_bokjiro:${servId}`), DETAIL_FIELDS);
+  if (cached) {
+    budget.countReused();
+    return cached as Partial<LocalPolicyDetail>;
+  }
+  if (budget.isExhausted) {
+    budget.countFailed();
+    return {};
+  }
+
   try {
     const { data } = await withRetry(() =>
       publicApiClient.get(`${LOCAL_BASE_URL}/LcgvWelfaredetailed`, {
@@ -208,7 +245,13 @@ async function fetchDetail(servId: string): Promise<Partial<LocalPolicyDetail>> 
       }),
     );
     const parsed = await parseXml(data);
-    const d = parsed.wantedDtl as Record<string, string>;
+    const d = (parsed.wantedDtl ?? {}) as Record<string, string>;
+    if (!parsed.wantedDtl && typeof data === 'string' && data.includes('LIMITED_NUMBER')) {
+      budget.markExhausted();
+      budget.countFailed();
+      return {};
+    }
+    budget.countFetched();
     return {
       sprtTrgtCn: d.sprtTrgtCn,
       slctCritCn: d.slctCritCn,
@@ -217,7 +260,9 @@ async function fetchDetail(servId: string): Promise<Partial<LocalPolicyDetail>> 
       enfcBgngYmd: d.enfcBgngYmd,
       enfcEndYmd: d.enfcEndYmd,
     };
-  } catch {
+  } catch (error) {
+    if (isRateLimited(error)) budget.markExhausted();
+    budget.countFailed();
     return {};
   }
 }
@@ -404,7 +449,10 @@ async function main() {
   }
   console.log(`\n✅ 목록 수집 완료: ${allItems.length}개`);
 
-  console.log('🔍 상세 조회 + 임베딩 + 저장 중...');
+  // 이미 상세를 확보한 항목은 네트워크를 타지 않는다(일일 한도 보호).
+  const storedRawData = await loadStoredRawData('local_bokjiro');
+  const detailBudget = new DetailBudget();
+  console.log(`🔍 상세 조회 + 임베딩 + 저장 중... (저장본 ${storedRawData.size}건 보유)`);
   let vectorUpdated = 0;
   let graphUpdated = 0;
   let skipped = 0;
@@ -413,7 +461,7 @@ async function main() {
 
     const details = await Promise.all(
       batch.map(async (item) => {
-        const detail = await fetchDetail(item.servId);
+        const detail = await fetchDetail(item.servId, storedRawData, detailBudget);
         return { ...item, ...detail } as LocalPolicyDetail;
       }),
     );
