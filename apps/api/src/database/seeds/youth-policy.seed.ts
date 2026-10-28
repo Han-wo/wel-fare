@@ -7,6 +7,11 @@
  * Point ID offset: 1_500_000_000 (기존 시더와 충돌 없는 구간)
  */
 import axios from 'axios';
+import {
+  collectDesiredPointIds,
+  expandToChunkPoints,
+  type ChunkPoint,
+} from './chunk-points.util';
 import { recordSeedRun } from './sync-log.util';
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -218,14 +223,18 @@ function extractDateRange(aplyYmd?: string) {
   };
 }
 
-async function removeStaleQdrantPoints(policies: PreparedYouthPolicy[]): Promise<number> {
+async function removeStaleQdrantPoints(
+  policies: ChunkPoint<YouthPolicy>[],
+): Promise<number> {
   if (policies.length === 0) return 0;
 
-  const desiredPointIds = new Map(
-    policies.map(({ item, policyId }) => [policyId, String(plcyNoToPointId(item.plcyNo))]),
-  );
+  // 조각 수가 줄면 뒤쪽 조각이 고아로 남는다. "정책에 속하지만 이번
+  // 포인트 집합에 없는 것"을 지운다(ID 하나와 비교하면 조각 1 이후가
+  // 매 실행마다 삭제·재생성된다).
+  const desiredPointIds = collectDesiredPointIds(policies);
   const stalePointIds = new Map<string, number | string>();
-  const policyIds = [...desiredPointIds.keys()];
+  const policyIds = [...new Set(policies.map((p) => p.policyId))];
+  const policyIdSet = new Set(policyIds);
 
   for (let i = 0; i < policyIds.length; i += QDRANT_LOOKUP_BATCH) {
     const policyIdBatch = policyIds.slice(i, i + QDRANT_LOOKUP_BATCH);
@@ -248,9 +257,8 @@ async function removeStaleQdrantPoints(policies: PreparedYouthPolicy[]): Promise
 
       for (const point of response.points) {
         const policyId = String(point.payload?.policyId ?? '');
-        const expectedPointId = desiredPointIds.get(policyId);
-        if (!expectedPointId) continue;
-        if (String(point.id) !== expectedPointId) {
+        if (!policyIdSet.has(policyId)) continue;
+        if (!desiredPointIds.has(String(point.id))) {
           stalePointIds.set(String(point.id), point.id as number | string);
         }
       }
@@ -378,16 +386,17 @@ function toRelationalPolicyInput(policy: YouthPolicy): RelationalPolicyUpsertInp
 
 // ── Qdrant upsert ────────────────────────────────────────
 async function upsertToQdrant(
-  policies: PreparedYouthPolicy[],
+  policies: ChunkPoint<YouthPolicy>[],
   embeddings: number[][],
 ): Promise<void> {
   await removeStaleQdrantPoints(policies);
 
-  const points = policies.map(({ item: p, policyId, content, syncHash }, i) => {
+  const points = policies.map(
+    ({ item: p, policyId, content, syncHash, chunkIndex, chunkTotal, pointId }, i) => {
     const institution = p.sprvsnInstCdNm ?? p.operInstCdNm ?? '청년정책';
     const ageInfo = buildAgeInfo(p);
     return {
-      id: plcyNoToPointId(p.plcyNo),
+      id: pointId,
       vector: buildQdrantVectors(embeddings[i], `${p.plcyNm}\n${content}`),
       payload: {
         policyId,
@@ -549,10 +558,16 @@ async function main() {
   for (let i = 0; i < plan.vectorUpdates.length; i += EMBED_BATCH) {
     const batch = plan.vectorUpdates.slice(i, i + EMBED_BATCH);
     try {
-      const embeddings = await embedTexts(batch.map((item) => item.content));
+      // 긴 문서는 섹션 경계로 조각내 각각 임베딩한다(짧은 문서는 조각 1개).
+      const chunkPoints = expandToChunkPoints(
+        batch,
+        (item) => plcyNoToPointId((item.item as YouthPolicy).plcyNo),
+        'youth_center',
+      );
+      const embeddings = await embedTexts(chunkPoints.map((c) => c.content));
       const graphBatch = batch.filter((item) => graphUpdateIds.has(item.policyId));
       await Promise.all([
-        upsertToQdrant(batch, embeddings),
+        upsertToQdrant(chunkPoints, embeddings),
         graphBatch.length > 0 ? upsertToNeo4j(graphBatch) : Promise.resolve(),
       ]);
       vectorDone += batch.length;

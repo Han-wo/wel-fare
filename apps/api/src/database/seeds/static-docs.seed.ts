@@ -14,6 +14,7 @@
  * 실행: pnpm --filter @welfare-ai/api run db:seed:static-docs
  */
 import * as fs from 'node:fs';
+import { expandToChunkPoints, type ChunkPoint } from './chunk-points.util';
 import { recordSeedRun } from './sync-log.util';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -160,12 +161,18 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 
 // ── 저장 ─────────────────────────────────────────────────
-async function upsertToQdrant(docs: PreparedDoc[], embeddings: number[][]): Promise<void> {
-  const points = docs.map(({ item: doc, policyId, content, syncHash }, i) => ({
-    id: docPointId(doc.policyId),
+async function upsertToQdrant(
+  docs: ChunkPoint<StaticDoc>[],
+  embeddings: number[][],
+): Promise<void> {
+  const points = docs.map(
+    ({ item: doc, policyId, content, syncHash, chunkIndex, chunkTotal, pointId }, i) => ({
+    id: pointId,
     vector: buildQdrantVectors(embeddings[i], `${doc.policyName}\n${content}`),
     payload: {
       policyId,
+      chunkIndex,
+      chunkTotal,
       policyName: doc.policyName,
       category: doc.category,
       targetGroup: doc.targetGroups.join(','),
@@ -253,8 +260,13 @@ async function main() {
   const vectorPromise =
     plan.vectorUpdates.length > 0
       ? (async () => {
-          const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
-          await upsertToQdrant(plan.vectorUpdates, embeddings);
+          const chunkPoints = expandToChunkPoints(
+            plan.vectorUpdates,
+            (item) => docPointId((item.item as StaticDoc).policyId),
+            SOURCE,
+          );
+          const embeddings = await embedTexts(chunkPoints.map((c) => c.content));
+          await upsertToQdrant(chunkPoints, embeddings);
           vectorUpdated = plan.vectorUpdates.length;
         })()
       : Promise.resolve();

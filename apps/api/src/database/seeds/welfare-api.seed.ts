@@ -5,6 +5,11 @@
  */
 import axios from 'axios';
 import {
+  collectDesiredPointIds,
+  expandToChunkPoints,
+  type ChunkPoint,
+} from './chunk-points.util';
+import {
   DetailBudget,
   isRateLimited,
   loadStoredRawData,
@@ -115,14 +120,18 @@ function buildPageContent(p: PolicyDetail): string {
   return parts.join('\n');
 }
 
-async function removeStaleQdrantPoints(policies: PreparedPolicy[]): Promise<number> {
+async function removeStaleQdrantPoints(
+  policies: ChunkPoint<PolicyDetail>[],
+): Promise<number> {
   if (policies.length === 0) return 0;
 
-  const desiredPointIds = new Map(
-    policies.map(({ item, policyId }) => [policyId, servIdToPointId(item.servId)]),
-  );
+  // 조각 수가 줄면 뒤쪽 조각이 고아로 남는다. 정책에 속하지만 이번
+  // 포인트 집합에 없는 것을 지운다(기존처럼 "ID 하나"와 비교하면
+  // 조각 1 이후가 매 실행마다 삭제·재생성된다).
+  const desiredPointIds = collectDesiredPointIds(policies);
   const stalePointIds = new Map<string, number | string>();
-  const policyIds = [...desiredPointIds.keys()];
+  const policyIds = [...new Set(policies.map((p) => p.policyId))];
+  const policyIdSet = new Set(policyIds);
 
   for (let i = 0; i < policyIds.length; i += QDRANT_LOOKUP_BATCH) {
     const policyIdBatch = policyIds.slice(i, i + QDRANT_LOOKUP_BATCH);
@@ -145,9 +154,8 @@ async function removeStaleQdrantPoints(policies: PreparedPolicy[]): Promise<numb
 
       for (const point of response.points) {
         const policyId = String(point.payload?.policyId ?? '');
-        const expectedPointId = desiredPointIds.get(policyId);
-        if (!expectedPointId) continue;
-        if (String(point.id) !== expectedPointId) {
+        if (!policyIdSet.has(policyId)) continue;
+        if (!desiredPointIds.has(String(point.id))) {
           stalePointIds.set(String(point.id), point.id as number | string);
         }
       }
@@ -334,14 +342,22 @@ function toRelationalPolicyInput(policy: PolicyDetail): RelationalPolicyUpsertIn
 }
 
 // ── Qdrant upsert ────────────────────────────────────────
-async function upsertToQdrant(policies: PreparedPolicy[], embeddings: number[][]): Promise<void> {
-  await removeStaleQdrantPoints(policies);
+async function upsertToQdrant(
+  chunkPoints: ChunkPoint<PolicyDetail>[],
+  embeddings: number[][],
+): Promise<void> {
+  await removeStaleQdrantPoints(chunkPoints);
 
-  const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
-    id: servIdToPointId(p.servId),
+  const points = chunkPoints.map(
+    ({ item: p, policyId, content, syncHash, chunkIndex, chunkTotal, pointId }, i) => ({
+    id: pointId,
     vector: buildQdrantVectors(embeddings[i], `${p.servNm}\n${content}`),
     payload: {
       policyId,
+      // 조각 위치. 답변에서 "어느 부분인지"를 추적하고, 같은 정책의
+      // 조각이 여럿 올라왔을 때 디버깅에 쓴다.
+      chunkIndex,
+      chunkTotal,
       policyName: p.servNm,
       category: p.intrsThemaArray ?? '',
       ministry: p.jurMnofNm,
@@ -472,8 +488,15 @@ async function main() {
     const vectorPromise =
       plan.vectorUpdates.length > 0
         ? (async () => {
-            const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
-            await upsertToQdrant(plan.vectorUpdates, embeddings);
+            // 긴 문서는 섹션 경계로 조각내 각 조각을 따로 임베딩한다.
+            // 짧은 문서(코퍼스의 97%)는 조각이 하나라 기존과 동일하다.
+            const chunkPoints = expandToChunkPoints(
+              plan.vectorUpdates,
+              (item) => servIdToPointId((item.item as PolicyDetail).servId),
+              'bokjiro',
+            );
+            const embeddings = await embedTexts(chunkPoints.map((c) => c.content));
+            await upsertToQdrant(chunkPoints, embeddings);
             vectorUpdated += plan.vectorUpdates.length;
           })()
         : Promise.resolve();

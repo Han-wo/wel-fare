@@ -4,6 +4,7 @@
  * 실행: ts-node --transpile-only src/database/seeds/local-welfare.seed.ts
  */
 import axios from 'axios';
+import { expandToChunkPoints, type ChunkPoint } from './chunk-points.util';
 import {
   DetailBudget,
   isRateLimited,
@@ -340,14 +341,17 @@ function toRelationalPolicyInput(policy: LocalPolicyDetail): RelationalPolicyUps
 
 // ── Qdrant upsert ────────────────────────────────────────
 async function upsertToQdrant(
-  policies: PreparedLocalPolicy[],
+  policies: ChunkPoint<LocalPolicyDetail>[],
   embeddings: number[][],
 ): Promise<void> {
-  const points = policies.map(({ item: p, policyId, content, syncHash }, i) => ({
-    id: servIdToNum(p.servId),
+  const points = policies.map(
+    ({ item: p, policyId, content, syncHash, chunkIndex, chunkTotal, pointId }, i) => ({
+    id: pointId,
     vector: buildQdrantVectors(embeddings[i], `${p.servNm}\n${content}`),
     payload: {
       policyId,
+      chunkIndex,
+      chunkTotal,
       policyName: p.servNm,
       category: p.intrsThemaNmArray ?? '',
       region: p.ctpvNm,
@@ -486,8 +490,14 @@ async function main() {
     const vectorPromise =
       plan.vectorUpdates.length > 0
         ? (async () => {
-            const embeddings = await embedTexts(plan.vectorUpdates.map((item) => item.content));
-            await upsertToQdrant(plan.vectorUpdates, embeddings);
+            // 긴 문서는 섹션 경계로 조각내 각각 임베딩한다(97%는 조각 1개라 무변경).
+            const chunkPoints = expandToChunkPoints(
+              plan.vectorUpdates,
+              (item) => servIdToNum((item.item as LocalPolicyDetail).servId),
+              'local_bokjiro',
+            );
+            const embeddings = await embedTexts(chunkPoints.map((c) => c.content));
+            await upsertToQdrant(chunkPoints, embeddings);
             vectorUpdated += plan.vectorUpdates.length;
           })()
         : Promise.resolve();

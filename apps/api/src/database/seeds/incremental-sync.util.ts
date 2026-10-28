@@ -2,6 +2,9 @@ import { createHash } from 'crypto';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import type { Driver } from 'neo4j-driver';
 
+// 한 정책이 가질 수 있는 조각 수 상한(여유분 포함). 실측 최대 4조각.
+const CHUNK_MAX_PIECES = 8;
+
 const LOOKUP_CHUNK_SIZE = 100;
 const QDRANT_RETRY_DELAY_MS = 600;
 
@@ -93,7 +96,10 @@ export async function fetchExistingQdrantSyncHashes(
               match: { value: policyId },
             })),
           },
-          limit: idChunk.length,
+          // 청킹 이후 정책 하나가 포인트 여러 개를 갖는다. limit을 정책 수로
+          // 잡으면 뒤쪽 조각을 못 읽어 "해시 없음"으로 보고 매번 재적재한다.
+          // 조각 상한(CHUNK_MAX_PIECES)을 곱해 여유를 둔다.
+          limit: idChunk.length * CHUNK_MAX_PIECES,
           offset,
           with_payload: true,
           with_vector: false,
